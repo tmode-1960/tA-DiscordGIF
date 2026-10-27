@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>thomo.ART DiscordGIF v1.2</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css?v=1.2">
+<script>
+  try {
+    const t = localStorage.getItem("tadiscordgif.theme");
+    if (t) document.documentElement.setAttribute("data-theme", t);
+  } catch(e) {}
+</script>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">⚡</span>
+    <span class="brand-thomo">thomo.ART</span>
+    <b class="brand-title">DiscordGIF</b>
+    <span class="brand-version" id="brandVersion">v1.2</span>
+  </div>
+
+  <div class="status" id="discordStatus">
+    <span class="dot"></span>
+    <span id="statusText" data-i18n="connecting">Looking for Discord...</span>
+  </div>
+
+  <div class="spacer"></div>
+
+  <span class="hotkey-badge" id="hotkeyBadge" data-i18n-title="hotkeyTitle" title="Global shortcut to open picker">Alt + G</span>
+  <button class="ghost" id="btnRefresh" data-i18n-title="refreshTitle" title="Refresh">🔄</button>
+  <button class="ghost" id="btnSettings" data-i18n="settings">⚙ Settings</button>
+</header>
+
+<main>
+  <!-- Left Column: Controls & Import -->
+  <section class="col left">
+    <div class="card">
+      <div class="seg" id="sourceSeg" style="margin-bottom: 12px;">
+        <button data-source="local" class="active" data-i18n="tabSourceLocal">📁 Meine GIFs</button>
+        <button data-source="tenor" data-i18n="tabSourceTenor">🌐 Discord / Tenor</button>
+      </div>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInput" data-i18n-ph="searchPlaceholder" placeholder="Search by name or tag...">
+      </div>
+      <div class="tabs" id="categoryTabs">
+        <button class="active" data-filter="all" data-i18n="tabAll">All</button>
+        <button data-filter="fav" data-i18n="tabFav">⭐ Favorites</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="discordBehavior">Discord Behavior</h2>
+      <div class="field">
+        <span class="field-head" data-i18n="pasteMode">Paste Mode</span>
+        <div class="seg" id="pasteModeSeg">
+          <button data-mode="file" class="active" data-i18n="pasteModeFile" data-i18n-title="pasteModeFileTip">File</button>
+          <button data-mode="url" data-i18n="pasteModeUrl" data-i18n-title="pasteModeUrlTip">Link (URL)</button>
+        </div>
+      </div>
+      <label class="check" style="margin-top: 10px;">
+        <input type="checkbox" id="chkAutoSend">
+        <span data-i18n="chkAutoSend">Auto-send with Enter immediately</span>
+      </label>
+      <p style="font-size: 11px; color: var(--mute); margin: 6px 0 0;">
+        💡 <b data-i18n="tipHotkey">Press Alt + G in Discord chat, click a GIF, and it pastes right in!</b>
+      </p>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="addGif">Add GIF</h2>
+      <div class="form">
+        <div class="dropzone" id="dropZone">
+          <p id="dropPrompt">📁 <b data-i18n="dropPrompt">Drop GIF here or click to browse</b></p>
+          <input type="file" id="fileInput" accept="image/gif" hidden>
+        </div>
+        
+        <div class="field">
+          <span class="field-head" data-i18n="orWebUrl">Or Web URL (Tenor, Giphy, Direct)</span>
+          <input type="url" id="inputUrl" data-i18n-ph="urlPlaceholder" placeholder="https://.../example.gif">
+        </div>
+
+        <div class="field">
+          <span class="field-head" data-i18n="titleOpt">Title (optional)</span>
+          <input type="text" id="inputTitle" data-i18n-ph="titlePlaceholder" placeholder="e.g. Haha Laugh">
+        </div>
+
+        <div class="field">
+          <span class="field-head" data-i18n="tagsLabel">Tags (comma-separated)</span>
+          <input type="text" id="inputTags" data-i18n-ph="tagsPlaceholder" placeholder="e.g. laugh, lol, meme">
+        </div>
+
+        <button class="primary" id="btnSaveGif" data-i18n="btnSaveGif" style="margin-top: 4px;">Save GIF</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right Column: GIF Gallery -->
+  <section class="col right">
+    <div class="card" style="height: 100%; display: flex; flex-direction: column;">
+      <div class="gallery-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h2 data-i18n="galleryTitle" style="margin: 0;">GIF Collection</h2>
+          <span class="count-badge" id="gifCount">0 GIFs</span>
+        </div>
+        <button class="ghost" id="btnReloadGallery" style="padding: 5px 12px; font-size: 12px; display: flex; align-items: center; gap: 6px; border-radius: 6px; cursor: pointer;" title="Ordner neu einlesen">
+          <span class="reload-icon" style="font-size: 13px; display: inline-block;">🔄</span>
+          <span data-i18n="btnReload">Ordner neu laden</span>
+        </button>
+      </div>
+
+      <div class="gif-grid" id="gifGrid">
+        <!-- Rendered via JavaScript -->
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Settings Dialog (1:1 tA-MusicMaker Design) -->
+<dialog id="settings">
+  <form method="dialog">
+    <h2 data-i18n="settingsTitle" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--mute); font-weight: 600; margin: 0 0 10px;">⚙ SETTINGS</h2>
+
+    <label class="field">
+      <span class="field-head" data-i18n="cfgLang">Language</span>
+      <select id="cfgLang">
+        <option value="en">English</option>
+        <option value="de">Deutsch</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="field-head" data-i18n="cfgTheme">Theme</span>
+      <select id="cfgTheme">
+        <option value="dark" data-i18n="themeDark">Dark (Default)</option>
+        <option value="light" data-i18n="themeLight">Light</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="field-head" data-i18n="cfgPasteMode">Default Paste Mode</span>
+      <select id="cfgPasteMode">
+        <option value="file" data-i18n="pasteModeFile">File (Upload)</option>
+        <option value="url" data-i18n="pasteModeUrl">Link (URL)</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="field-head" data-i18n="cfgGifDir">GIF Directory (Folder with subfolders)</span>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <input type="text" id="cfgGifDir" style="flex: 1;" data-i18n-ph="cfgGifDirPh" placeholder="Default (App data) or e.g. D:\MyGIFs">
+        <button type="button" id="btnBrowseFolder" class="ghost" style="padding: 7px 12px; font-size: 12px; white-space: nowrap;" data-i18n="btnBrowse">📁 Browse...</button>
+        <button type="button" id="btnResetFolder" class="ghost" style="padding: 7px 10px; font-size: 12px; white-space: nowrap;" title="Reset" data-i18n="btnResetFolder">Reset</button>
+      </div>
+    </label>
+
+    <div class="settings-credits-box" style="margin-top: 14px; padding: 12px 14px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;">
+      <div style="font-weight: 700; font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 6px;">
+        <span data-i18n="creditsTitle">Copyright & Credits</span>
+      </div>
+      <div style="font-size: 12px; color: var(--mute); margin-top: 6px; line-height: 1.45;" data-i18n="creditsText">
+        I would like to thank CodexMundi for their support and for testing the app.
+      </div>
+      <div style="font-size: 11px; color: var(--accent2); margin-top: 6px; font-weight: 600;" data-i18n="creditsCopy">
+        © 2026 thomo.ART • DiscordGIF Edition
+      </div>
+    </div>
+
+    <div class="actions">
+      <button value="cancel" class="ghost" data-i18n="cancel">Cancel</button>
+      <button id="cfgSave" value="ok" class="primary" data-i18n="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Edit GIF Dialog -->
+<dialog id="editModal">
+  <form method="dialog">
+    <h2 data-i18n="editTitle" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--mute); font-weight: 600; margin: 0 0 10px;">✏️ GIF BEARBEITEN</h2>
+
+    <div style="text-align: center; margin-bottom: 12px; display: flex; justify-content: center;">
+      <img id="editPreview" src="" alt="Preview" style="max-height: 120px; max-width: 100%; border-radius: 8px; border: 1px solid var(--line); object-fit: contain; background: rgba(0,0,0,0.3);">
+    </div>
+
+    <label class="field">
+      <span class="field-head" data-i18n="titleOpt">Titel</span>
+      <input type="text" id="editTitleInput" required>
+    </label>
+
+    <label class="field">
+      <span class="field-head" data-i18n="tagsLabel">Tags (kommagetrennt)</span>
+      <input type="text" id="editTagsInput">
+    </label>
+
+    <div class="actions">
+      <button value="cancel" class="ghost" data-i18n="cancel">Cancel</button>
+      <button id="btnSaveEdit" value="ok" class="primary" data-i18n="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/i18n.js?v=1.2"></script>
+<script src="/app.js?v=1.2"></script>
+</body>
+</html>

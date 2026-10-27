@@ -1,0 +1,19 @@
+# Build and Distribution
+dist/
+build/
+bin/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Local User Data & GIFs
+data/
+
+# Backups & Temp
+_backups/
+.vscode/
+.idea/
