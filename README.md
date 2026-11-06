@@ -19,6 +19,7 @@ A lightweight Windows desktop manager for animated GIFs with instant Discord int
 - **Tagging & Live Search:** Quick real-time filtering by tags, titles, and favorites.
 - **Drag & Drop Import:** Easily drop local GIF files into the app or paste web URLs.
 - **Folder & Subfolder Categorization:** Automatically turns subfolders in your GIF directory into category tabs.
+- **Local AI GIF Generation:** Generate custom animated GIFs directly inside the app powered by **MiniMax H3 (Hailuo)** and **LTX-Video** via local ComfyUI integration!
 
 ---
 
@@ -27,7 +28,7 @@ A lightweight Windows desktop manager for animated GIFs with instant Discord int
 ### Option 1: Standalone Application (Recommended for Users)
 **No Python or installation required!**
 1. Go to the [**Releases**](https://github.com/tmode-1960/tA-DiscordGIF/releases) section on the right side of this repository.
-2. Download `tA-DiscordGIF-v1.2.zip`.
+2. Download `tA-DiscordGIF.zip` from the latest release.
 3. Extract the ZIP to any location on your PC.
 4. Double-click `tA-DiscordGIF.exe` to run.
 
@@ -117,6 +118,48 @@ Click the **`⚙ Settings`** button in the top-right header:
   * **`✏️` Edit:** Opens a dialog to edit the title or tags.
   * **`🗑️` Delete:** Deletes the GIF.
   * **`📥 Save to Folder` (in Tenor mode):** Downloads an online Tenor GIF directly to your local PC collection!
+
+---
+
+## 🎬 AI GIF Generation & Requirements (MiniMax H3)
+
+tA-DiscordGIF includes a built-in AI video generator powered by your local **ComfyUI** installation.
+
+### ✨ Supported Models
+* **MiniMax H3 (Hailuo) • Ultra Action & Character:**  
+  Specialized in photorealistic human interactions, facial expressions, and dynamic character motions (eating, drinking, speaking, laughing, etc.). Generates fluid motion in only **8 steps**.
+* **LTX-Video:** Ultra-fast, high-resolution text/image-to-video diffusion.
+* **SVD-XT (Stable Video Diffusion):** High-consistency video generation from still images.
+
+---
+
+### ⚙️ Requirements for AI Generation
+
+> [!NOTE]  
+> The core GIF manager features (search, collection, `Alt + G` Discord inserter) do **not** require ComfyUI and run 100% standalone! The requirements below apply only if you want to generate new GIFs using AI locally.
+
+1. **Local ComfyUI:**  
+   * ComfyUI running locally (default endpoint: `http://127.0.0.1:8188`).
+2. **Hardware / GPU:**  
+   * NVIDIA GPU with **8 GB to 24 GB VRAM**.
+   * Thanks to INT8 quantization, MiniMax H3 runs smoothly even on mid-range GPUs (8 GB – 12 GB VRAM).
+3. **Model Files for MiniMax H3:**  
+   Download the following safetensors files and place them into your respective ComfyUI directories:
+   * **Diffusion Model** (`ComfyUI/models/diffusion_models/`):  
+     `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (~14.5 GB)  
+     *(Alternative: `fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors`)*
+   * **Text Encoder** (`ComfyUI/models/text_encoders/`):  
+     `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` (~15.7 GB)  
+     *(Alternative: `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`)*
+   * **Video VAE** (`ComfyUI/models/vae/`):  
+     `minimax_h3_video_vae_fp16.safetensors` (~400 MB)
+
+### 🚀 How to Generate
+1. Launch ComfyUI on your machine.
+2. In **tA-DiscordGIF**, open the AI Generation panel.
+3. Select the **MiniMax H3** workflow.
+4. Enter your prompt (or upload an initial image), configure frames/fps, and click **Generate**.
+5. Once finished, the GIF is automatically added to your library, ready to be sent to Discord with **`Alt + G`**!
 
 ---
 
