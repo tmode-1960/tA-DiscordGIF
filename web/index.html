@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>thomo.ART DiscordGIF v1.2</title>
+<title>thomo.ART DiscordGIF v1.7</title>
 <link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="/style.css?v=1.2">
+<link rel="stylesheet" href="/style.css?v=1.7">
 <script>
   try {
     const t = localStorage.getItem("tadiscordgif.theme");
@@ -20,7 +20,7 @@
     <span class="logo">⚡</span>
     <span class="brand-thomo">thomo.ART</span>
     <b class="brand-title">DiscordGIF</b>
-    <span class="brand-version" id="brandVersion">v1.2</span>
+    <span class="brand-version" id="brandVersion">v1.7</span>
   </div>
 
   <div class="status" id="discordStatus">
@@ -38,13 +38,14 @@
 <main>
   <!-- Left Column: Controls & Import -->
   <section class="col left">
-    <div class="card">
+    <div class="card" id="sourceCard">
       <div class="seg" id="sourceSeg" style="margin-bottom: 12px;">
-        <button data-source="local" class="active" data-i18n="tabSourceLocal">📁 Meine GIFs</button>
+        <button data-source="local" class="active" data-i18n="tabSourceLocal">📁 My GIFs</button>
         <button data-source="tenor" data-i18n="tabSourceTenor">🌐 Discord / Tenor</button>
+        <button data-source="ai" data-i18n="tabSourceAi">✨ AI Studio</button>
       </div>
 
-      <div class="search-box">
+      <div class="search-box" id="searchBoxContainer">
         <span class="search-icon">🔍</span>
         <input type="text" id="searchInput" data-i18n-ph="searchPlaceholder" placeholder="Search by name or tag...">
       </div>
@@ -54,7 +55,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="behaviorCard">
       <h2 data-i18n="discordBehavior">Discord Behavior</h2>
       <div class="field">
         <span class="field-head" data-i18n="pasteMode">Paste Mode</span>
@@ -72,7 +73,7 @@
       </p>
     </div>
 
-    <div class="card">
+    <div class="card" id="addGifCard">
       <h2 data-i18n="addGif">Add GIF</h2>
       <div class="form">
         <div class="dropzone" id="dropZone">
@@ -98,19 +99,81 @@
         <button class="primary" id="btnSaveGif" data-i18n="btnSaveGif" style="margin-top: 4px;">Save GIF</button>
       </div>
     </div>
+
+    <!-- AI Generator Settings Card (Active in AI Tab) -->
+    <div class="card" id="aiSettingsCard" style="display: none;">
+      <h2 style="display: flex; align-items: center; gap: 6px;">
+        <span>⚙️</span>
+        <span data-i18n="aiSettingsCardTitle">AI Settings</span>
+      </h2>
+
+      <div class="field">
+        <span class="field-head" data-i18n="aiModelLabel">AI Model</span>
+        <select id="aiModelSelect" style="width: 100%;">
+          <option value="minimax_h3" selected>MiniMax H3 (Hailuo) • Ultra Action & Character</option>
+          <option value="ltx_video">LTX-Video 2B • Fast Action & Motion</option>
+          <option value="svd_xt">Stable Video Diffusion (SVD-XT) • Ambient</option>
+        </select>
+      </div>
+
+      <div class="field" style="margin-top: 10px;">
+        <span class="field-head" data-i18n="aiResolutionLabel">Quality & VRAM Profile</span>
+        <select id="aiResolutionSelect" style="width: 100%;">
+          <option value="high" selected data-i18n="aiResHigh">High Resolution (576×576 • 16 GB+ VRAM)</option>
+          <option value="standard" data-i18n="aiResStandard">Standard (512×512 • 8–12 GB VRAM)</option>
+          <option value="fast" data-i18n="aiResFast">Fast / Eco (480×272 • 6–8 GB VRAM)</option>
+        </select>
+      </div>
+
+      <div class="field" style="margin-top: 10px;">
+        <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+          <span class="field-head" data-i18n="aiMotionIntensity" style="margin: 0;">Motion Intensity</span>
+          <span id="aiMotionVal" style="color: var(--accent); font-weight: bold;">100</span>
+        </div>
+        <input type="range" id="aiMotionRange" min="20" max="220" value="100" style="width: 100%;">
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--mute);">
+          <span data-i18n="aiMotionLow">Subtle</span>
+          <span data-i18n="aiMotionHigh">Dynamic</span>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top: 10px;">
+        <span class="field-head" data-i18n="aiFramesDuration">Frames / Duration</span>
+        <select id="aiFramesSelect" style="width: 100%;">
+          <option value="17" data-i18n="aiFrames17">17 Frames (Fast, ~1.4s)</option>
+          <option value="25" data-i18n="aiFrames25">25 Frames (Short, ~2.1s)</option>
+          <option value="33" data-i18n="aiFrames33">33 Frames (~2.8s)</option>
+          <option value="44" selected data-i18n="aiFrames44">44 Frames (Default / Recommended, ~3.6s)</option>
+        </select>
+      </div>
+
+      <div class="field" style="margin-top: 10px;">
+        <span class="field-head" data-i18n="aiFpsLabel">Frame Rate (FPS)</span>
+        <select id="aiFpsSelect" style="width: 100%;">
+          <option value="10">10 FPS</option>
+          <option value="12" selected data-i18n="aiFps12">12 FPS (Optimal for Discord)</option>
+          <option value="16" data-i18n="aiFps16">16 FPS (Smoother)</option>
+        </select>
+      </div>
+
+      <label class="check" style="margin-top: 12px;">
+        <input type="checkbox" id="chkAiPingPong">
+        <span data-i18n="aiLoopSeamless" style="font-size: 12px;">Seamless Ping-Pong Loop</span>
+      </label>
+    </div>
   </section>
 
-  <!-- Right Column: GIF Gallery -->
+  <!-- Right Column: GIF Gallery & AI Studio -->
   <section class="col right">
-    <div class="card" style="height: 100%; display: flex; flex-direction: column;">
+    <div class="card" id="galleryCard" style="height: 100%; display: flex; flex-direction: column;">
       <div class="gallery-header">
         <div style="display: flex; align-items: center; gap: 10px;">
           <h2 data-i18n="galleryTitle" style="margin: 0;">GIF Collection</h2>
           <span class="count-badge" id="gifCount">0 GIFs</span>
         </div>
-        <button class="ghost" id="btnReloadGallery" style="padding: 5px 12px; font-size: 12px; display: flex; align-items: center; gap: 6px; border-radius: 6px; cursor: pointer;" title="Ordner neu einlesen">
+        <button class="ghost" id="btnReloadGallery" style="padding: 5px 12px; font-size: 12px; display: flex; align-items: center; gap: 6px; border-radius: 6px; cursor: pointer;" data-i18n-title="refreshTitle" title="Reload folder">
           <span class="reload-icon" style="font-size: 13px; display: inline-block;">🔄</span>
-          <span data-i18n="btnReload">Ordner neu laden</span>
+          <span data-i18n="btnReload">Reload folder</span>
         </button>
       </div>
 
@@ -118,7 +181,166 @@
         <!-- Rendered via JavaScript -->
       </div>
     </div>
+
+    <!-- AI Studio Main Interactive Card -->
+    <div class="card" id="aiStudioCard" style="height: 100%; display: none; flex-direction: column; overflow-y: auto;">
+      <div class="ai-header" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; border-bottom: 1px solid var(--line); padding-bottom: 12px;">
+        <div>
+          <h2 style="margin: 0; display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--accent);">✨</span>
+            <span data-i18n="aiStudioTitle">AI Image-to-GIF Studio</span>
+          </h2>
+          <p style="margin: 4px 0 0; font-size: 12px; color: var(--mute);" data-i18n="aiStudioSub">Transform still images into animated Discord GIFs using local AI</p>
+        </div>
+        <div class="ai-status-badge" id="aiStatusBadge" style="display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; font-size: 12px; background: rgba(255,255,255,0.05); border: 1px solid var(--line);">
+          <span class="dot" id="aiStatusDot" style="width: 8px; height: 8px; border-radius: 50%; background: #888;"></span>
+          <span id="aiStatusText" data-i18n="aiStatusOffline">ComfyUI offline</span>
+        </div>
+      </div>
+
+      <!-- Offline / Warning Banner -->
+      <div class="ai-banner offline-banner" id="aiOfflineBanner" style="display: none; background: rgba(255, 184, 77, 0.1); border: 1px solid var(--warn); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+        <div style="display: flex; gap: 10px; align-items: flex-start;">
+          <span style="font-size: 20px;">⚠️</span>
+          <div style="flex: 1;">
+            <b style="color: var(--warn); font-size: 13px;" data-i18n="aiComfyOfflineTitle">ComfyUI not reachable</b>
+            <p style="font-size: 12px; color: var(--text); margin: 4px 0 8px; line-height: 1.4;" data-i18n="aiOfflineHelp">
+              Local AI generation is paused. Start your local ComfyUI instance on your PC (127.0.0.1:8188) to generate GIFs from images.
+            </p>
+            <div style="display: flex; gap: 8px;">
+              <button class="ghost" id="btnCheckComfy" style="padding: 5px 12px; font-size: 11px;" data-i18n="aiBtnCheckConnection">Check connection again</button>
+              <button class="ghost" id="btnOpenComfyHelp" style="padding: 5px 12px; font-size: 11px;" data-i18n="aiBtnHelpSetup">Help & Setup 📖</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Model Missing Banner -->
+      <div class="ai-banner model-banner" id="aiModelMissingBanner" style="display: none; background: rgba(124, 92, 255, 0.1); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+        <div style="display: flex; gap: 12px; align-items: flex-start; justify-content: space-between;">
+          <div style="flex: 1;">
+            <b style="color: var(--accent); font-size: 13px;" id="aiModelMissingTitle" data-i18n="aiRequiredModelsTitle">Required AI Models</b>
+            <p style="font-size: 12px; color: var(--mute); margin: 3px 0 10px;" id="aiModelMissingText" data-i18n="aiRequiredModelsDesc">
+              The following model files are required in ComfyUI for this workflow:
+            </p>
+            <!-- Detailed File List with Status -->
+            <div id="aiRequiredFilesList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-end; padding-top: 2px;">
+            <button class="primary" id="btnDownloadAllModels" style="padding: 7px 14px; font-size: 12px; white-space: nowrap; display: none;" data-i18n="aiBtnDownloadAllSimple">
+              📥 Download all
+            </button>
+            <button class="primary" id="btnDownloadModel" style="padding: 7px 14px; font-size: 12px; white-space: nowrap; display: none;" data-i18n="aiBtnDownloadModelSimple">
+              📥 Download model
+            </button>
+          </div>
+        </div>
+        <!-- Download Progress Bar -->
+        <div id="aiDownloadProgressBox" style="display: none; margin-top: 12px;">
+          <div class="progress-bar-bg" style="height: 6px; background: rgba(0,0,0,0.4); border-radius: 3px; overflow: hidden;">
+            <div id="aiDownloadProgressBar" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.3s;"></div>
+          </div>
+          <div id="aiDownloadProgressText" style="font-size: 11px; color: var(--mute); margin-top: 4px;">0%</div>
+        </div>
+      </div>
+
+      <!-- Generation Interactive Form -->
+      <div class="ai-form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1;">
+        <!-- Left: Image Dropzone & Preview -->
+        <div class="ai-box">
+          <label class="field-head" data-i18n="aiSourceImage" style="display: block; margin-bottom: 6px; font-weight: 600;">Source Image (PNG/JPG)</label>
+          <div class="dropzone ai-dropzone" id="aiDropZone" style="min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--line); border-radius: 8px; cursor: pointer; position: relative; overflow: hidden; background: rgba(0,0,0,0.15);">
+            <div id="aiDropPlaceholder" style="text-align: center; padding: 20px;">
+              <span style="font-size: 32px; display: block; margin-bottom: 6px;">🖼️</span>
+              <p style="margin: 0; font-size: 13px; color: var(--text);"><b data-i18n="aiDropPrompt">Drop image here or click to browse</b></p>
+              <p style="margin: 4px 0 0; font-size: 11px; color: var(--mute);">JPG, PNG or WebP</p>
+            </div>
+            <img id="aiSourcePreview" src="" alt="Source Preview" style="display: none; max-height: 240px; max-width: 100%; object-fit: contain;">
+            <input type="file" id="aiFileInput" accept="image/png,image/jpeg,image/webp" hidden>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+            <span id="aiImageInfo" style="font-size: 11px; color: var(--mute);"></span>
+            <button type="button" class="ghost" id="btnClearAiImage" style="display: none; padding: 2px 8px; font-size: 11px; color: var(--danger);" data-i18n="aiBtnRemove">Remove</button>
+          </div>
+        </div>
+
+        <!-- Right: Prompt, Ideas, and Actions -->
+        <div class="ai-box" style="display: flex; flex-direction: column;">
+          <label class="field-head" data-i18n="aiMotionPrompt" style="display: block; margin-bottom: 6px; font-weight: 600;">Motion Action (Prompt)</label>
+          <input type="text" id="aiPromptInput" data-i18n-ph="aiPromptPh" placeholder="e.g. eating popcorn, chewing, smiling..." style="width: 100%; padding: 10px; font-size: 13px;">
+
+          <!-- Prompt Idea Pills -->
+          <div style="margin-top: 8px;">
+            <span style="font-size: 11px; color: var(--mute); display: block; margin-bottom: 4px;" data-i18n="aiIdeasLabel">Quick Ideas:</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px;" id="aiPromptPills">
+              <button type="button" class="pill-btn" data-prompt="eating popcorn, chewing, smiling" data-i18n="ideaPopcorn">🍿 Popcorn</button>
+              <button type="button" class="pill-btn" data-prompt="laughing out loud, cheerful expression" data-i18n="ideaLaugh">😂 Laugh</button>
+              <button type="button" class="pill-btn" data-prompt="waving hand hello, friendly smiling" data-i18n="ideaWave">👋 Wave</button>
+              <button type="button" class="pill-btn" data-prompt="clapping hands applauding" data-i18n="ideaClap">👏 Clap</button>
+              <button type="button" class="pill-btn" data-prompt="facepalm with hand on face" data-i18n="ideaFacepalm">🤦 Facepalm</button>
+              <button type="button" class="pill-btn" data-prompt="dancing, energetic movement" data-i18n="ideaDance">💃 Dance</button>
+            </div>
+          </div>
+
+          <!-- Prompt Model Notice (for SVD vs Action) -->
+          <div id="aiPromptNotice" style="display: none; margin-top: 6px; font-size: 11px; color: var(--mute); line-height: 1.3;" data-i18n="aiPromptNoticeSvd"></div>
+
+          <div style="margin-top: 14px;">
+            <label class="field-head" style="display: block; margin-bottom: 4px; font-size: 12px;" data-i18n="aiTitleLabel">Title for GIF Collection (optional)</label>
+            <input type="text" id="aiTitleInput" data-i18n-ph="aiTitlePh" placeholder="e.g. Popcorn Snack" style="width: 100%;">
+          </div>
+
+          <div style="margin-top: auto; padding-top: 14px;">
+            <div style="display: flex; gap: 8px;">
+              <button class="primary" id="btnGenerateAi" style="flex: 1; padding: 12px; font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px;" data-i18n="aiBtnGenerate">
+                🚀 Generate Discord GIF
+              </button>
+              <button class="ghost" id="btnCancelAi" style="display: none; padding: 12px 18px; color: var(--danger);" data-i18n="aiBtnCancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Generation Progress Panel -->
+      <div id="aiProgressCard" style="display: none; margin-top: 16px; padding: 14px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span style="font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+            <span class="reload-icon" style="font-size: 14px; display: inline-block;">⚙️</span>
+            <span id="aiProgressText" data-i18n="aiGenFrames">Generating video frames...</span>
+          </span>
+          <span id="aiProgressPercent" style="font-size: 13px; font-weight: bold; color: var(--accent);">0%</span>
+        </div>
+        <div class="progress-bar-bg" style="height: 8px; background: rgba(0,0,0,0.5); border-radius: 4px; overflow: hidden; position: relative;">
+          <div id="aiProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.4s ease; box-shadow: 0 0 10px var(--accent);"></div>
+        </div>
+      </div>
+
+      <!-- Finished Result Panel -->
+      <div id="aiResultCard" style="display: none; margin-top: 16px; padding: 16px; background: var(--panel2); border: 1px solid var(--accent2); border-radius: 8px;">
+        <div style="display: flex; gap: 16px; align-items: center;">
+          <div style="max-width: 180px; max-height: 180px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); background: #000; display: flex; align-items: center; justify-content: center;">
+            <img id="aiResultImg" src="" alt="Generated GIF" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+          </div>
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span style="color: var(--accent2); font-size: 18px;">✅</span>
+              <h3 id="aiResultTitle" style="margin: 0; font-size: 15px;" data-i18n="aiResultTitleSuccess">GIF created successfully!</h3>
+            </div>
+            <p id="aiResultInfo" style="margin: 4px 0 10px; font-size: 12px; color: var(--mute);">2.4 MB • 25 Frames • Discord Ready ✨</p>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <button class="primary" id="btnSendAiToDiscord" style="padding: 9px 18px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; background: var(--accent2); color: #000;" data-i18n="aiInsertNow">
+                ⚡ Paste into Discord
+              </button>
+              <button class="ghost" id="btnViewInCollection" style="padding: 9px 14px; font-size: 12px;" data-i18n="aiViewInCollection">
+                📁 View in Collection
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
+
 </main>
 
 <!-- Settings Dialog (1:1 tA-MusicMaker Design) -->
@@ -159,6 +381,22 @@
       </div>
     </label>
 
+    <label class="field">
+      <span class="field-head" data-i18n="cfgComfyUrl">ComfyUI Server URL</span>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <input type="text" id="cfgComfyUrl" style="flex: 1;" placeholder="http://127.0.0.1:8188">
+        <button type="button" id="btnTestComfy" class="ghost" style="padding: 7px 12px; font-size: 12px; white-space: nowrap;">⚡ Test</button>
+      </div>
+    </label>
+
+    <label class="field">
+      <span class="field-head" data-i18n="cfgComfyDir">ComfyUI Directory (for 1-click model download)</span>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <input type="text" id="cfgComfyDir" style="flex: 1;" placeholder="e.g. D:\ComfyUI_windows_portable">
+        <button type="button" id="btnBrowseComfyFolder" class="ghost" style="padding: 7px 12px; font-size: 12px; white-space: nowrap;" data-i18n="btnBrowse">📁 Browse...</button>
+      </div>
+    </label>
+
     <div class="settings-credits-box" style="margin-top: 14px; padding: 12px 14px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;">
       <div style="font-weight: 700; font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 6px;">
         <span data-i18n="creditsTitle">Copyright & Credits</span>
@@ -181,19 +419,19 @@
 <!-- Edit GIF Dialog -->
 <dialog id="editModal">
   <form method="dialog">
-    <h2 data-i18n="editTitle" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--mute); font-weight: 600; margin: 0 0 10px;">✏️ GIF BEARBEITEN</h2>
+    <h2 data-i18n="editTitle" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--mute); font-weight: 600; margin: 0 0 10px;">✏️ EDIT GIF</h2>
 
     <div style="text-align: center; margin-bottom: 12px; display: flex; justify-content: center;">
       <img id="editPreview" src="" alt="Preview" style="max-height: 120px; max-width: 100%; border-radius: 8px; border: 1px solid var(--line); object-fit: contain; background: rgba(0,0,0,0.3);">
     </div>
 
     <label class="field">
-      <span class="field-head" data-i18n="titleOpt">Titel</span>
+      <span class="field-head" data-i18n="titleOpt">Title (optional)</span>
       <input type="text" id="editTitleInput" required>
     </label>
 
     <label class="field">
-      <span class="field-head" data-i18n="tagsLabel">Tags (kommagetrennt)</span>
+      <span class="field-head" data-i18n="tagsLabel">Tags (comma-separated)</span>
       <input type="text" id="editTagsInput">
     </label>
 
@@ -206,7 +444,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/i18n.js?v=1.2"></script>
-<script src="/app.js?v=1.2"></script>
+<script src="/i18n.js?v=1.7"></script>
+<script src="/app.js?v=1.7"></script>
 </body>
 </html>

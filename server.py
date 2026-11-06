@@ -29,11 +29,13 @@ import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-APP_VERSION = "1.2"
+APP_VERSION = "1.7"
 IS_FROZEN = getattr(sys, "frozen", False)
 BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BUNDLE_DIR, "web") if os.path.isdir(os.path.join(BUNDLE_DIR, "web")) else os.path.join(APP_DIR, "web")
+WORKFLOWS_DIR = os.path.join(BUNDLE_DIR, "workflows") if os.path.isdir(os.path.join(BUNDLE_DIR, "workflows")) else os.path.join(APP_DIR, "workflows")
+
 
 def _resolve_data_dir() -> str:
     local_data = os.path.join(APP_DIR, "data")
@@ -156,12 +158,18 @@ ACTIVE_WEBVIEW_WINDOW = None
 DEFAULT_CONFIG = {
     "port": 8769,
     "theme": "dark",
-    "language": "de",
+    "language": "en",
     "auto_send": False,
     "paste_mode": "file",  # "file" or "url"
     "hotkey": "Alt+G",
     "gif_dir": "",
     "tenor_api_key": "",
+    "comfyui_url": "http://127.0.0.1:8188",
+    "comfyui_dir": "",
+    "ai_workflow": "svd_xt",
+    "ai_fps": 12,
+    "ai_motion_bucket": 100,
+    "ai_loop_mode": "pingpong",
 }
 
 CUSTOM_GIF_INDEX: dict[str, dict] = {}
@@ -350,12 +358,13 @@ def scan_custom_directory(custom_dir: str) -> list[dict]:
 
                     # Clean title from file name
                     raw_name = os.path.splitext(file)[0]
-                    clean_name = re.sub(r"[-_.]+", " ", raw_name).strip()
+                    # Strip trailing random hex hash or number suffix for clean title display
+                    clean_raw = re.sub(r"_[0-9a-fA-F]{4,8}$", "", raw_name)
+                    clean_name = re.sub(r"[-_.]+", " ", clean_raw).strip()
                     title = clean_name.title() if clean_name else "GIF"
 
-                    # Generate searchable tags from relative path and name
-                    words = set(re.findall(r"\w+", rel.lower()))
-                    tags = [w for w in words if len(w) > 1 and not w.isdigit()]
+                    # Custom folder tags: only folder category, do NOT flood tags with filename words
+                    tags = [category.lower()] if category else []
 
                     gid = "ext_" + hashlib.sha1(rel.encode("utf-8", "ignore")).hexdigest()[:10]
                     item = {
@@ -366,7 +375,7 @@ def scan_custom_directory(custom_dir: str) -> list[dict]:
                         "abs_path": full_path,
                         "rel_path": rel,
                         "url": f"/api/gif_file?id={gid}",
-                        "tags": sorted(tags),
+                        "tags": tags,
                         "is_custom_folder": True,
                         "favorite": False,
                         "use_count": 0,
@@ -408,37 +417,39 @@ def get_active_library() -> list[dict]:
             CUSTOM_GIF_INDEX[item["id"]] = item
     return saved_lib
 
-def select_folder_dialog(initial_dir: str = "") -> str | None:
-    """Open native Windows directory selection dialog."""
-    global ACTIVE_WEBVIEW_WINDOW
-    if ACTIVE_WEBVIEW_WINDOW:
-        try:
-            import webview
-            res = ACTIVE_WEBVIEW_WINDOW.create_file_dialog(
-                webview.FOLDER_DIALOG,
-                directory=initial_dir if os.path.isdir(initial_dir) else ""
-            )
-            if res:
-                return res[0] if isinstance(res, (list, tuple)) else str(res)
-            return None
-        except Exception as ex:
-            print("[dialog] pywebview dialog error:", ex)
-
+def select_folder_dialog(initial_dir: str = "", title: str = "Ordner auswählen") -> str | None:
+    """Open crash-proof Windows directory dialog via an isolated subprocess."""
+    safe_title = title.replace('"', '').replace("'", "")
+    init_path = initial_dir.replace("'", "''") if initial_dir and os.path.isdir(initial_dir) else ""
+    ps_script = f"""
+    [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null
+    $f = New-Object System.Windows.Forms.FolderBrowserDialog
+    $f.Description = '{safe_title}'
+    $f.ShowNewFolderButton = $true
+    if ('{init_path}' -and (Test-Path '{init_path}')) {{ $f.SelectedPath = '{init_path}' }}
+    $top = New-Object System.Windows.Forms.Form
+    $top.TopMost = $true
+    $res = $f.ShowDialog($top)
+    if ($res -eq [System.Windows.Forms.DialogResult]::OK) {{
+        Write-Output $f.SelectedPath
+    }}
+    """
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", 1)
-        selected = filedialog.askdirectory(
-            initialdir=initial_dir if os.path.isdir(initial_dir) else None,
-            title="GIF-Verzeichnis auswählen"
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script]
+        creation_flags = 0x08000000 if sys.platform == "win32" else 0
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+            creationflags=creation_flags,
         )
-        root.destroy()
-        return selected if selected else None
+        out = proc.stdout.strip()
+        if out and os.path.isdir(out):
+            return out
     except Exception as ex:
-        print("[dialog] tkinter dialog error:", ex)
-
+        print("[dialog] Error showing folder dialog:", ex)
     return None
 
 def load_config() -> dict:
@@ -632,6 +643,863 @@ def hotkey_thread_worker():
         user32.DispatchMessageW(ctypes.byref(msg))
 
 # ---------------------------------------------------------------------------
+# ComfyUI & Local AI Image-to-GIF Generator Engine
+# ---------------------------------------------------------------------------
+def _srv_t(de: str, en: str) -> str:
+    try:
+        return de if load_config().get("language") == "de" else en
+    except Exception:
+        return en
+
+AI_STATE = {
+    "busy": False,
+    "progress": 0,
+    "status_text": "Ready",
+    "error": None,
+    "current_gif": None,
+    "prompt_id": None,
+    "start_time": 0.0,
+}
+AI_STATE_LOCK = threading.Lock()
+
+DOWNLOAD_STATE = {
+    "downloading": False,
+    "progress": 0.0,
+    "downloaded_mb": 0.0,
+    "total_mb": 0.0,
+    "speed_mb": 0.0,
+    "status_text": "Ready",
+    "error": None,
+}
+DOWNLOAD_STATE_LOCK = threading.Lock()
+
+def get_ffmpeg_path() -> str | None:
+    """Find local or system ffmpeg executable."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    local_bin = os.path.join(APP_DIR, "bin", "ffmpeg.exe")
+    if os.path.isfile(local_bin):
+        return local_bin
+    for probe in [
+        r"C:\PortableApps\FFmpeg\bin\ffmpeg.exe",
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\FFmpeg\bin\ffmpeg.exe",
+    ]:
+        if os.path.isfile(probe):
+            return probe
+    return None
+
+def get_workflows_list() -> list[dict]:
+    manifest_path = os.path.join(WORKFLOWS_DIR, "workflows.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as ex:
+            print("[ai] Error reading workflows.json:", ex)
+    return []
+
+def check_comfyui_status(comfy_url: str = "") -> dict:
+    cfg = load_config()
+    url = (comfy_url or cfg.get("comfyui_url") or "http://127.0.0.1:8188").rstrip("/")
+    ffmpeg_exe = get_ffmpeg_path()
+    result = {
+        "online": False,
+        "url": url,
+        "ffmpeg_installed": ffmpeg_exe is not None,
+        "ffmpeg_path": ffmpeg_exe or "",
+        "installed_models": [],
+        "devices": [],
+        "workflows": get_workflows_list(),
+    }
+    try:
+        req = urllib.request.Request(f"{url}/system_stats", headers={"User-Agent": "tA-DiscordGIF"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            result["online"] = True
+            result["devices"] = data.get("devices", [])
+    except Exception:
+        result["online"] = False
+        return result
+
+    # Check available checkpoints & text encoders in ComfyUI
+    for loader, param in [
+        ("ImageOnlyCheckpointLoader", "ckpt_name"),
+        ("CheckpointLoaderSimple", "ckpt_name"),
+        ("CLIPLoader", "clip_name"),
+        ("DualCLIPLoader", "clip_name1"),
+        ("UNETLoader", "unet_name"),
+        ("VAELoader", "vae_name"),
+        ("LoraLoader", "lora_name"),
+    ]:
+        try:
+            req_ckpt = urllib.request.Request(f"{url}/object_info/{loader}", headers={"User-Agent": "tA-DiscordGIF"})
+            with urllib.request.urlopen(req_ckpt, timeout=1.8) as resp_ckpt:
+                info = json.loads(resp_ckpt.read().decode("utf-8"))
+                ckpts = info.get(loader, {}).get("input", {}).get("required", {}).get(param, [[]])[0]
+                if isinstance(ckpts, list):
+                    for c in ckpts:
+                        if c not in result["installed_models"]:
+                            result["installed_models"].append(c)
+        except Exception:
+            pass
+
+    # Also check if models physically exist in auto-detected checkpoints & text_encoders folders
+    auto_dir = auto_detect_comfy_checkpoints()
+    result["detected_checkpoints_dir"] = auto_dir or ""
+    if auto_dir and os.path.isdir(auto_dir):
+        for root, _, files in os.walk(auto_dir):
+            for f in files:
+                low = f.lower()
+                if low.endswith(".safetensors") or low.endswith(".ckpt"):
+                    rel = os.path.relpath(os.path.join(root, f), auto_dir).replace("\\", "/")
+                    if rel not in result["installed_models"]:
+                        result["installed_models"].append(rel)
+                    if f not in result["installed_models"]:
+                        result["installed_models"].append(f)
+
+        base_dir = os.path.dirname(auto_dir.rstrip(r"\/"))
+        for sub in [
+            "text_encoders", "clip", "models/text_encoders", "models/clip",
+            "diffusion_models", "unet", "models/diffusion_models", "models/unet",
+            "vae", "models/vae", "loras", "models/loras"
+        ]:
+            sub_dir = os.path.join(base_dir, sub)
+            if os.path.isdir(sub_dir):
+                for root, _, files in os.walk(sub_dir):
+                    for f in files:
+                        low = f.lower()
+                        if low.endswith(".safetensors") or low.endswith(".ckpt") or low.endswith(".bin"):
+                            rel = os.path.relpath(os.path.join(root, f), sub_dir).replace("\\", "/")
+                            if rel not in result["installed_models"]:
+                                result["installed_models"].append(rel)
+                            if f not in result["installed_models"]:
+                                result["installed_models"].append(f)
+
+    return result
+
+def comfy_upload_image(comfy_url: str, img_bytes: bytes, filename: str) -> str:
+    boundary = "----WebKitFormBoundary" + uuid.uuid4().hex
+    crlf = b"\r\n"
+    data = []
+    data.append(b"--" + boundary.encode("ascii") + crlf)
+    data.append(f'Content-Disposition: form-data; name="image"; filename="{filename}"'.encode("utf-8") + crlf)
+    data.append(b"Content-Type: image/png" + crlf + crlf)
+    data.append(img_bytes + crlf)
+    data.append(b"--" + boundary.encode("ascii") + crlf)
+    data.append(b'Content-Disposition: form-data; name="overwrite"' + crlf + crlf)
+    data.append(b"true" + crlf)
+    data.append(b"--" + boundary.encode("ascii") + b"--" + crlf)
+    body = b"".join(data)
+
+    req = urllib.request.Request(
+        f"{comfy_url.rstrip('/')}/upload/image",
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "tA-DiscordGIF",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        res_data = json.loads(resp.read().decode("utf-8"))
+        return res_data.get("name", filename)
+
+def comfy_queue_prompt(comfy_url: str, workflow_dict: dict, client_id: str) -> str:
+    payload = json.dumps({"prompt": workflow_dict, "client_id": client_id}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{comfy_url.rstrip('/')}/prompt",
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "tA-DiscordGIF"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            return res.get("prompt_id", "")
+    except urllib.error.HTTPError as he:
+        err_body = he.read().decode("utf-8", "ignore")
+        try:
+            err_json = json.loads(err_body)
+            if "node_errors" in err_json:
+                msgs = []
+                for n_id, n_err in err_json["node_errors"].items():
+                    for e in n_err.get("errors", []):
+                        msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
+                        msgs.append(msg)
+                raise RuntimeError("ComfyUI: " + "; ".join(msgs))
+            if "error" in err_json:
+                err_info = err_json["error"]
+                msg = err_info.get("message", str(err_info)) if isinstance(err_info, dict) else str(err_info)
+                raise RuntimeError("ComfyUI: " + msg)
+        except Exception:
+            pass
+        raise RuntimeError(f"ComfyUI Fehler: {err_body}")
+
+def comfy_interrupt(comfy_url: str) -> bool:
+    try:
+        req = urllib.request.Request(
+            f"{comfy_url.rstrip('/')}/interrupt",
+            data=b"{}",
+            headers={"Content-Type": "application/json", "User-Agent": "tA-DiscordGIF"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
+    except Exception as ex:
+        print("[ai] Interrupt error:", ex)
+        return False
+
+def compile_frames_to_gif(frames_dir: str, output_path: str, fps: int = 12, scale_width: int = 400, pingpong: bool = True) -> bool:
+    ffmpeg = get_ffmpeg_path()
+    if not ffmpeg:
+        print("[ai] FFmpeg not found!")
+        return False
+
+    input_pattern = os.path.join(frames_dir, "frame_%05d.png")
+    if pingpong:
+        filter_str = (
+            f"[0:v]reverse[r];"
+            f"[0:v][r]concat=n=2:v=1[full];"
+            f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+            f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+            f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+        )
+    else:
+        filter_str = (
+            f"[0:v]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+            f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+            f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+        )
+
+    cmd = [
+        ffmpeg, "-y",
+        "-framerate", str(fps),
+        "-i", input_pattern,
+        "-filter_complex", filter_str,
+        "-loop", "0",
+        output_path,
+    ]
+    creation_flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            creationflags=creation_flags,
+        )
+        if proc.returncode != 0:
+            print("[ai] FFmpeg compile error:", proc.stderr)
+            return False
+        return os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+    except Exception as ex:
+        print("[ai] FFmpeg execution error:", ex)
+        return False
+
+def _safe_json_str(val: str) -> str:
+    """Safely escape arbitrary string (paths, model names, prompts) for raw JSON template insertion."""
+    return json.dumps(str(val))[1:-1]
+
+def _run_ai_generation_thread(params: dict):
+    global AI_STATE
+    client_id = str(uuid.uuid4())
+    temp_frames_dir = None
+    try:
+        with AI_STATE_LOCK:
+            AI_STATE["busy"] = True
+            AI_STATE["progress"] = 5
+            AI_STATE["status_text"] = _srv_t("Prüfe ComfyUI...", "Checking ComfyUI...")
+            AI_STATE["error"] = None
+            AI_STATE["current_gif"] = None
+            AI_STATE["start_time"] = time.time()
+
+        cfg = load_config()
+        comfy_url = (cfg.get("comfyui_url") or "http://127.0.0.1:8188").rstrip("/")
+
+        # 1. Decode source image
+        img_b64 = params.get("image_data", "")
+        if "," in img_b64:
+            img_b64 = img_b64.split(",", 1)[1]
+        img_bytes = base64.b64decode(img_b64)
+        source_filename = f"tA_source_{str(uuid.uuid4())[:8]}.png"
+
+        # 2. Upload image to ComfyUI
+        with AI_STATE_LOCK:
+            AI_STATE["progress"] = 12
+            AI_STATE["status_text"] = _srv_t("Lade Ausgangsbild zu ComfyUI hoch...", "Uploading source image to ComfyUI...")
+
+        uploaded_name = comfy_upload_image(comfy_url, img_bytes, source_filename)
+
+        # 3. Load workflow
+        workflow_id = params.get("workflow_id") or cfg.get("ai_workflow") or "svd_xt"
+        workflow_path = os.path.join(WORKFLOWS_DIR, f"{workflow_id}.json")
+        if not os.path.isfile(workflow_path):
+            raise FileNotFoundError(f"Workflow '{workflow_id}.json' nicht gefunden.")
+
+        with open(workflow_path, "r", encoding="utf-8") as fh:
+            wf_str = fh.read()
+
+        # Auto-detect source image aspect ratio to avoid squishing/stretching
+        import io
+        from PIL import Image
+
+        orig_w, orig_h = 512, 512
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as pil_img:
+                orig_w, orig_h = pil_img.size
+        except Exception:
+            pass
+
+        req_w = int(params.get("width") or 512)
+        req_h = int(params.get("height") or 512)
+        target_area = req_w * req_h
+
+        if orig_w > 0 and orig_h > 0:
+            aspect = float(orig_w) / float(orig_h)
+            calc_h = (target_area / aspect) ** 0.5
+            calc_w = calc_h * aspect
+            width = max(192, min(832, int(round(calc_w / 32.0)) * 32))
+            height = max(192, min(832, int(round(calc_h / 32.0)) * 32))
+        else:
+            width = req_w
+            height = req_h
+
+        frames = int(params.get("frames") or 44)
+        fps = int(params.get("fps") or 12)
+        motion_bucket = int(params.get("motion_bucket") or 100)
+        seed = int(params.get("seed") or int(time.time() * 1000) % 1000000000)
+        steps = int(params.get("steps") or 20)
+
+        # Workflow-specific adjustments
+        if "ltx" in workflow_id.lower():
+            width = max(64, (width // 32) * 32)
+            height = max(64, (height // 32) * 32)
+            frames = max(9, (((frames - 1) // 8) * 8) + 1)
+            # Map motion_bucket (20 - 200) to strength (0.85 down to 0.48)
+            # motion_bucket 20 -> 0.85 (subtle/rigid)
+            # motion_bucket 100 -> 0.65 (active dynamic motion)
+            # motion_bucket 200 -> 0.48 (maximum motion freedom)
+            t = max(0.0, min(1.0, (motion_bucket - 20) / (200 - 20)))
+            ltx_strength = round(0.85 - (t * 0.37), 2)
+            ltx_cfg = 3.5
+            if steps < 25:
+                steps = 25
+        elif "minimax" in workflow_id.lower() or "h3" in workflow_id.lower():
+            width = max(64, (width // 32) * 32)
+            height = max(64, (height // 32) * 32)
+            ltx_strength = 0.85
+            ltx_cfg = 1.0
+            # FastH3 / MiniMax H3 produces photorealistic motion in 8 steps
+            steps = 8
+
+            # Dynamically resolve exact installed model names from ComfyUI
+            comfy_status = check_comfyui_status(comfy_url)
+            avail_models = comfy_status.get("installed_models", [])
+
+            def _resolve_model_name(candidates, default_val, keywords=None):
+                for cand in candidates:
+                    for m in avail_models:
+                        ml = m.lower().replace("\\", "/")
+                        cl = cand.lower().replace("\\", "/")
+                        if ml == cl or ml.endswith("/" + cl):
+                            return m
+                if keywords:
+                    for m in avail_models:
+                        ml = m.lower()
+                        if all(kw.lower() in ml for kw in keywords):
+                            return m
+                return default_val
+
+            unet_name = _resolve_model_name([
+                "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
+                "minimax_h3_hybrid_fl2va_ref2va_b30-49-int8.safetensors",
+                "MiniMax_H3_Ref2VA_pruned_int8_convrot.safetensors",
+                "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                "minimax_h3_fl2va_bf16.safetensors",
+            ], "minimax_h3/minimax_h3_fl2va_pruned_int8_convrot.safetensors", ["minimax", "fl2va"])
+
+            clip_name = _resolve_model_name([
+                "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+                "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
+                "qwen3vl_32b_minimax_h3_bf16.safetensors",
+            ], "minimax_h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", ["qwen3vl", "minimax"])
+
+            vae_name = _resolve_model_name([
+                "minimax_h3_video_vae_fp16.safetensors",
+                "minimax_h3_video_vae_bf16.safetensors",
+                "minimax_h3_video_vae.safetensors",
+                "minimax_video_vae_fp16.safetensors",
+            ], "minimax_h3/minimax_h3_video_vae_fp16.safetensors", ["minimax", "vae"])
+
+            wf_str = wf_str.replace("{{UNET_NAME}}", _safe_json_str(unet_name))
+            wf_str = wf_str.replace("{{CLIP_NAME}}", _safe_json_str(clip_name))
+            wf_str = wf_str.replace("{{VAE_NAME}}", _safe_json_str(vae_name))
+        else:
+            ltx_strength = 0.85
+            ltx_cfg = 3.0
+
+        wf_str = wf_str.replace("{{IMAGE_FILENAME}}", _safe_json_str(uploaded_name))
+        wf_str = wf_str.replace("{{WIDTH}}", str(width))
+        wf_str = wf_str.replace("{{HEIGHT}}", str(height))
+        wf_str = wf_str.replace("{{FRAMES}}", str(frames))
+        wf_str = wf_str.replace("{{FPS}}", str(float(fps)))
+        wf_str = wf_str.replace("{{MOTION_BUCKET}}", str(motion_bucket))
+        wf_str = wf_str.replace("{{STRENGTH}}", str(ltx_strength))
+        wf_str = wf_str.replace("{{CFG}}", str(ltx_cfg))
+        wf_str = wf_str.replace("{{SEED}}", str(seed))
+        wf_str = wf_str.replace("{{STEPS}}", str(steps))
+        prompt_txt = str(params.get("prompt") or "").strip()
+        wf_str = wf_str.replace("{{PROMPT}}", _safe_json_str(prompt_txt))
+
+        wf_dict = json.loads(wf_str)
+
+        # 4. Queue prompt
+        with AI_STATE_LOCK:
+            AI_STATE["progress"] = 20
+            AI_STATE["status_text"] = _srv_t("Sende Prompt an ComfyUI Queue...", "Sending prompt to ComfyUI queue...")
+
+        prompt_id = comfy_queue_prompt(comfy_url, wf_dict, client_id)
+        if not prompt_id:
+            raise RuntimeError("ComfyUI hat keine Prompt-ID zurückgegeben.")
+
+        with AI_STATE_LOCK:
+            AI_STATE["prompt_id"] = prompt_id
+            AI_STATE["progress"] = 25
+            AI_STATE["status_text"] = _srv_t("ComfyUI rendert Video-Frames...", "ComfyUI is rendering video frames...")
+
+        # 5. Poll for completion
+        history_url = f"{comfy_url}/history/{prompt_id}"
+        poll_start = time.time()
+        output_images = []
+
+        while True:
+            if not AI_STATE["busy"]:
+                # Aborted by user
+                comfy_interrupt(comfy_url)
+                return
+
+            try:
+                req_h = urllib.request.Request(history_url, headers={"User-Agent": "tA-DiscordGIF"})
+                with urllib.request.urlopen(req_h, timeout=5) as resp_h:
+                    h_data = json.loads(resp_h.read().decode("utf-8"))
+                    if prompt_id in h_data:
+                        prompt_hist = h_data[prompt_id]
+                        outputs = prompt_hist.get("outputs", {})
+                        for node_id, node_out in outputs.items():
+                            if "images" in node_out:
+                                output_images.extend(node_out["images"])
+                        break
+            except Exception:
+                pass
+
+            elapsed = int(time.time() - poll_start)
+            sim_progress = min(85, 25 + int(elapsed * 1.5))
+            with AI_STATE_LOCK:
+                AI_STATE["progress"] = sim_progress
+                AI_STATE["status_text"] = _srv_t(f"Generiere AI Video-Frames ({elapsed}s)...", f"Generating AI video frames ({elapsed}s)...")
+
+            time.sleep(0.8)
+
+        if not output_images:
+            raise RuntimeError("ComfyUI hat keine gerenderten Bilder ausgegeben.")
+
+        # 6. Download rendered frames to temp dir
+        with AI_STATE_LOCK:
+            AI_STATE["progress"] = 88
+            AI_STATE["status_text"] = _srv_t("Lade gerenderte Frames herunter...", "Downloading rendered frames...")
+
+        temp_frames_dir = os.path.join(DATA_DIR, "temp", f"ai_{client_id[:8]}")
+        os.makedirs(temp_frames_dir, exist_ok=True)
+
+        for idx, img_info in enumerate(output_images):
+            fn = img_info.get("filename")
+            subf = img_info.get("subfolder", "")
+            img_type = img_info.get("type", "output")
+            view_url = f"{comfy_url}/view?filename={urllib.parse.quote(fn)}&subfolder={urllib.parse.quote(subf)}&type={img_type}"
+            dest_frame = os.path.join(temp_frames_dir, f"frame_{idx:05d}.png")
+            req_v = urllib.request.Request(view_url, headers={"User-Agent": "tA-DiscordGIF"})
+            with urllib.request.urlopen(req_v, timeout=15) as resp_v, open(dest_frame, "wb") as out_f:
+                shutil.copyfileobj(resp_v, out_f)
+
+        # 7. Convert frames to GIF using FFmpeg
+        with AI_STATE_LOCK:
+            AI_STATE["progress"] = 93
+            AI_STATE["status_text"] = _srv_t("Optimiere Discord-GIF (FFmpeg Palette)...", "Optimizing Discord GIF (FFmpeg Palette)...")
+
+        # Determine target folder
+        custom_dir = cfg.get("gif_dir", "").strip()
+        target_base = custom_dir if custom_dir and os.path.isdir(custom_dir) else GIFS_DIR
+        ai_folder = os.path.join(target_base, "AI-Generated")
+        os.makedirs(ai_folder, exist_ok=True)
+
+        user_title = params.get("title", "").strip() or "AI_GIF"
+        clean_title = re.sub(r'[\\/*?:"<>|]+', '', user_title).strip().replace(" ", "_")
+
+        # Find next available 3-digit index (_001, _002, ...)
+        existing = set(os.listdir(ai_folder)) if os.path.isdir(ai_folder) else set()
+        idx = 1
+        while True:
+            candidate = f"{clean_title}_{idx:03d}.gif"
+            if candidate not in existing:
+                gif_filename = candidate
+                break
+            idx += 1
+
+        final_gif_path = os.path.join(ai_folder, gif_filename)
+
+        scale_width = int(params.get("scale_width") or (480 if width > height else 400))
+        if width > height and scale_width < 480:
+            scale_width = 480
+        pingpong = bool(params.get("loop_mode", "pingpong") == "pingpong")
+
+        compile_ok = compile_frames_to_gif(temp_frames_dir, final_gif_path, fps=fps, scale_width=scale_width, pingpong=pingpong)
+        if not compile_ok:
+            raise RuntimeError("FFmpeg GIF-Erstellung fehlgeschlagen.")
+
+        # 8. Register in library
+        file_size_mb = round(os.path.getsize(final_gif_path) / (1024 * 1024), 2)
+        rel_path = f"AI-Generated/{gif_filename}"
+        gid = "ai_" + hashlib.sha1(rel_path.encode("utf-8", "ignore")).hexdigest()[:10]
+
+        gif_item = {
+            "id": gid,
+            "title": clean_title.replace("_", " ").title(),
+            "category": "AI-Generated",
+            "filename": rel_path if target_base == GIFS_DIR else None,
+            "abs_path": final_gif_path,
+            "rel_path": rel_path,
+            "url": f"/api/gif_file?id={gid}",
+            "tags": ["ai", "animated", "reaction"],
+            "favorite": False,
+            "use_count": 0,
+            "created_at": int(time.time()),
+            "file_size_mb": file_size_mb,
+        }
+
+        CUSTOM_GIF_INDEX[gid] = gif_item
+        lib = load_library()
+        lib.insert(0, gif_item)
+        save_library(lib)
+
+        with AI_STATE_LOCK:
+            AI_STATE["busy"] = False
+            AI_STATE["progress"] = 100
+            AI_STATE["status_text"] = _srv_t(f"Fertig! GIF erstellt ({file_size_mb} MB)", f"Done! GIF created ({file_size_mb} MB)")
+            AI_STATE["current_gif"] = gif_item
+
+    except Exception as ex:
+        print("[ai] Generation error:", ex)
+        with AI_STATE_LOCK:
+            AI_STATE["busy"] = False
+            AI_STATE["error"] = str(ex)
+            AI_STATE["status_text"] = _srv_t(f"Fehler: {ex}", f"Error: {ex}")
+    finally:
+        if temp_frames_dir and os.path.isdir(temp_frames_dir):
+            try:
+                shutil.rmtree(temp_frames_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+def _is_backup_path(p: str) -> bool:
+    if not p:
+        return False
+    low = p.lower()
+    return low.startswith("i:") or any(x in low for x in ["backup", "veeam", "clonezilla", "$recycle.bin", "system volume information"])
+
+def _parse_extra_model_paths_yaml(yaml_path: str) -> str | None:
+    try:
+        with open(yaml_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        base_path = ""
+        checkpoints_path = ""
+        for line in lines:
+            line_s = line.strip()
+            if line_s.startswith("base_path:"):
+                base_path = line_s.split(":", 1)[1].strip().strip('"\'')
+            elif line_s.startswith("checkpoints:"):
+                checkpoints_path = line_s.split(":", 1)[1].strip().strip('"\'')
+        target = checkpoints_path or (base_path + "/checkpoints" if base_path else "")
+        if target and not target.startswith("/home/") and not target.startswith("/"):
+            if os.path.isdir(target) and not _is_backup_path(target):
+                return target
+    except Exception:
+        pass
+    return None
+
+def auto_detect_comfy_checkpoints() -> str | None:
+    """
+    Intelligently discovers the ComfyUI models/checkpoints directory without prompting the user:
+    1. Checks sibling tA-VideoMaker config (models_dir & comfy_dir).
+    2. Checks user-configured 'comfyui_dir' from config.json.
+    3. Known local candidate directories (EXCLUDING drive I: and backup directories).
+    4. Parses extra_model_paths.yaml in any discovered ComfyUI directory.
+    5. Inspects running processes on port 8188 silently without console popup.
+    6. Fast scan drive roots (C: to H:).
+    """
+    # 1. Check sibling tA-VideoMaker config (models_dir & comfy_dir)
+    sibling_configs = [
+        os.path.join(APP_DIR, "..", "tA-VideoMaker", "dist", "data", "config.json"),
+        os.path.join(APP_DIR, "..", "tA-VideoMaker", "data", "config.json"),
+        r"D:\Workspace\AG\tA-VideoMaker\dist\data\config.json",
+        r"D:\Workspace\AG\tA-VideoMaker\data\config.json",
+    ]
+    for scp in sibling_configs:
+        if os.path.isfile(scp):
+            try:
+                with open(scp, "r", encoding="utf-8") as f_sc:
+                    sc = json.load(f_sc)
+                    md = sc.get("models_dir", "").strip()
+                    if md and os.path.isdir(md) and not _is_backup_path(md):
+                        for sub in [os.path.join(md, "checkpoints"), md]:
+                            if os.path.isdir(sub):
+                                return sub
+                    cd = sc.get("comfy_dir", "").strip()
+                    if cd and os.path.isdir(cd) and not _is_backup_path(cd):
+                        for sub in [os.path.join(cd, "models", "checkpoints"), os.path.join(cd, "checkpoints")]:
+                            if os.path.isdir(sub):
+                                return sub
+            except Exception:
+                pass
+
+    # 2. Config check
+    try:
+        cfg = load_config()
+        saved = cfg.get("comfyui_dir", "").strip()
+        if saved and os.path.isdir(saved) and not _is_backup_path(saved):
+            for sub in [os.path.join(saved, "models", "checkpoints"), os.path.join(saved, "checkpoints"), saved]:
+                if os.path.isdir(sub):
+                    return sub
+    except Exception:
+        pass
+
+    # 3. Known local candidate directories (EXCLUDING drive I: and backup directories)
+    known_candidates = [
+        r"E:\Tools\ComfyUI\CEI-1\ComfyUI",
+        r"E:\Tools\ComfyUI\CEI-1-DEV\ComfyUI",
+        r"C:\ComfyUI_windows_portable\ComfyUI",
+        r"D:\ComfyUI_windows_portable\ComfyUI",
+        r"E:\ComfyUI_windows_portable\ComfyUI",
+        r"C:\ComfyUI",
+        r"D:\ComfyUI",
+        r"E:\ComfyUI",
+    ]
+    for k in known_candidates:
+        if os.path.isdir(k) and not _is_backup_path(k):
+            yaml_path = os.path.join(k, "extra_model_paths.yaml")
+            if os.path.isfile(yaml_path):
+                parsed = _parse_extra_model_paths_yaml(yaml_path)
+                if parsed:
+                    return parsed
+            for sub in [os.path.join(k, "models", "checkpoints"), os.path.join(k, "checkpoints")]:
+                if os.path.isdir(sub):
+                    return sub
+
+    # 4. Active process listening on port 8188 (silent subprocess)
+    creation_flags = 0x08000000 if sys.platform == "win32" else 0
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=creation_flags
+        )
+        pid = None
+        for line in out.stdout.splitlines():
+            if ":8188" in line and "LISTENING" in line:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    break
+        if pid:
+            cmd = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", f"(Get-Process -Id {pid}).Path"],
+                capture_output=True, text=True, timeout=3,
+                creationflags=creation_flags
+            )
+            p_path = cmd.stdout.strip()
+            if p_path and os.path.isfile(p_path) and not _is_backup_path(p_path):
+                base = os.path.dirname(p_path)
+                for candidate in [base, os.path.dirname(base)]:
+                    if not _is_backup_path(candidate):
+                        yaml_path = os.path.join(candidate, "extra_model_paths.yaml")
+                        if os.path.isfile(yaml_path):
+                            parsed = _parse_extra_model_paths_yaml(yaml_path)
+                            if parsed:
+                                return parsed
+                        for sub in [
+                            os.path.join(candidate, "ComfyUI", "models", "checkpoints"),
+                            os.path.join(candidate, "models", "checkpoints")
+                        ]:
+                            if os.path.isdir(sub):
+                                return sub
+    except Exception:
+        pass
+
+    # 5. Fast scan drive roots (strictly ignoring I: and any backup drive)
+    drives = [f"{chr(c)}:\\" for c in range(ord('C'), ord('H')+1)]
+    for d in drives:
+        if not os.path.exists(d):
+            continue
+        try:
+            for entry in os.listdir(d):
+                low = entry.lower()
+                if "comfy" in low or "cei" in low:
+                    full = os.path.join(d, entry)
+                    if os.path.isdir(full) and not _is_backup_path(full):
+                        for sub in [
+                            os.path.join(full, "ComfyUI", "models", "checkpoints"),
+                            os.path.join(full, "models", "checkpoints")
+                        ]:
+                            if os.path.isdir(sub):
+                                return sub
+        except Exception:
+            pass
+
+    return None
+
+def get_comfy_model_folder(folder_type: str = "checkpoints") -> str | None:
+    """
+    Returns the target ComfyUI folder for a given model type:
+    - 'checkpoints' -> models/checkpoints
+    - 'text_encoders' or 'clip' -> models/text_encoders or models/clip
+    - other -> models/<folder_type>
+    Auto-detects live ComfyUI installation, creating subdirectories if needed.
+    """
+    ckpt_dir = auto_detect_comfy_checkpoints()
+    if not ckpt_dir:
+        # Fallback to configured comfyui_dir
+        try:
+            cfg = load_config()
+            saved = cfg.get("comfyui_dir", "").strip()
+            if saved and os.path.isdir(saved) and not _is_backup_path(saved):
+                for sub in [os.path.join(saved, "models", "checkpoints"), os.path.join(saved, "checkpoints"), saved]:
+                    if os.path.isdir(sub):
+                        ckpt_dir = sub
+                        break
+        except Exception:
+            pass
+
+    if not ckpt_dir:
+        return None
+
+    if folder_type == "checkpoints":
+        return ckpt_dir
+
+    # Find the models base directory
+    if ckpt_dir.rstrip(r"\/").endswith("checkpoints"):
+        models_base = os.path.dirname(ckpt_dir.rstrip(r"\/"))
+    else:
+        models_base = ckpt_dir
+
+    if folder_type in ("text_encoders", "clip"):
+        # Check existing directories
+        for cand in [
+            os.path.join(models_base, "text_encoders"),
+            os.path.join(models_base, "clip"),
+            os.path.join(models_base, "models", "text_encoders"),
+            os.path.join(models_base, "models", "clip"),
+        ]:
+            if os.path.isdir(cand):
+                return cand
+        # If neither exists, default to text_encoders and create it
+        target = os.path.join(models_base, "text_encoders")
+        try:
+            os.makedirs(target, exist_ok=True)
+            return target
+        except Exception:
+            return os.path.join(models_base, "clip")
+
+    # Other folder types (e.g. vae, loras)
+    target = os.path.join(models_base, folder_type)
+    try:
+        os.makedirs(target, exist_ok=True)
+        return target
+    except Exception:
+        return target
+
+def _run_model_download_thread(model_url: str, dest_dir: str, custom_filename: str = ""):
+    global DOWNLOAD_STATE
+    try:
+        with DOWNLOAD_STATE_LOCK:
+            DOWNLOAD_STATE["downloading"] = True
+            DOWNLOAD_STATE["progress"] = 0.0
+            DOWNLOAD_STATE["downloaded_mb"] = 0.0
+            DOWNLOAD_STATE["total_mb"] = 0.0
+            DOWNLOAD_STATE["speed_mb"] = 0.0
+            DOWNLOAD_STATE["status_text"] = _srv_t("Starte Download...", "Starting download...")
+            DOWNLOAD_STATE["error"] = None
+
+        if custom_filename:
+            filename = custom_filename
+        else:
+            filename = os.path.basename(urllib.parse.urlparse(model_url).path)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_file = os.path.join(dest_dir, filename)
+
+        ssl_ctx = ssl._create_unverified_context()
+        req = urllib.request.Request(
+            model_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        start_time = time.time()
+        last_time = start_time
+        downloaded = 0
+
+        # Try connecting with retry on temporary DNS / socket blips (e.g. Errno 11002 WSATRY_AGAIN)
+        resp = None
+        for attempt in range(1, 4):
+            try:
+                resp = urllib.request.urlopen(req, timeout=30, context=ssl_ctx)
+                break
+            except Exception as e:
+                if attempt >= 3:
+                    raise
+                with DOWNLOAD_STATE_LOCK:
+                    DOWNLOAD_STATE["status_text"] = _srv_t(f"Verbindungsversuch {attempt}/3 fehlgeschlagen, neuer Versuch...", f"Connection attempt {attempt}/3 failed, retrying...")
+                time.sleep(2)
+
+        with resp, open(dest_file, "wb") as out_f:
+            total_size = int(resp.headers.get("content-length", 0))
+            total_mb = round(total_size / (1024 * 1024), 1)
+            with DOWNLOAD_STATE_LOCK:
+                DOWNLOAD_STATE["total_mb"] = total_mb
+
+            chunk_size = 1024 * 1024 * 2  # 2 MB buffer for faster throughput
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                out_f.write(chunk)
+                downloaded += len(chunk)
+                now = time.time()
+                if now - last_time >= 0.5:
+                    downloaded_mb = round(downloaded / (1024 * 1024), 1)
+                    speed = round((downloaded / (1024 * 1024)) / max(0.1, now - start_time), 2)
+                    pct = round((downloaded / total_size) * 100, 1) if total_size else 0.0
+                    with DOWNLOAD_STATE_LOCK:
+                        DOWNLOAD_STATE["progress"] = pct
+                        DOWNLOAD_STATE["downloaded_mb"] = downloaded_mb
+                        DOWNLOAD_STATE["speed_mb"] = speed
+                        DOWNLOAD_STATE["status_text"] = f"{downloaded_mb} MB / {total_mb} MB ({pct}%) • {speed} MB/s"
+                    last_time = now
+
+        with DOWNLOAD_STATE_LOCK:
+            DOWNLOAD_STATE["downloading"] = False
+            DOWNLOAD_STATE["progress"] = 100.0
+            DOWNLOAD_STATE["status_text"] = _srv_t(f"Download abgeschlossen! ({filename})", f"Download complete! ({filename})")
+
+    except Exception as ex:
+        print("[ai] Download error:", ex)
+        with DOWNLOAD_STATE_LOCK:
+            DOWNLOAD_STATE["downloading"] = False
+            DOWNLOAD_STATE["error"] = str(ex)
+            DOWNLOAD_STATE["status_text"] = _srv_t(f"Fehler: {ex}", f"Error: {ex}")
+
+# ---------------------------------------------------------------------------
 # HTTP Server & API
 # ---------------------------------------------------------------------------
 class AppHandler(BaseHTTPRequestHandler):
@@ -721,6 +1589,26 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "settings": cfg})
             return
 
+        if path == "/api/ai/status":
+            url_param = urllib.parse.parse_qs(url_parsed.query).get("url", [""])[0]
+            st = check_comfyui_status(url_param)
+            self.send_json(st)
+            return
+
+        if path == "/api/ai/workflows":
+            self.send_json({"ok": True, "workflows": get_workflows_list()})
+            return
+
+        if path == "/api/ai/progress":
+            with AI_STATE_LOCK:
+                self.send_json(dict(AI_STATE))
+            return
+
+        if path == "/api/ai/download_progress":
+            with DOWNLOAD_STATE_LOCK:
+                self.send_json(dict(DOWNLOAD_STATE))
+            return
+
         # Static file delivery
         if path.startswith("/gifs/"):
             gif_filename = os.path.basename(urllib.parse.unquote(path[6:]))
@@ -785,6 +1673,72 @@ class AppHandler(BaseHTTPRequestHandler):
             cfg.update(body)
             save_config(cfg)
             self.send_json({"ok": True, "settings": cfg})
+            return
+
+        if path == "/api/ai/generate":
+            body = self.read_json_body()
+            with AI_STATE_LOCK:
+                if AI_STATE["busy"]:
+                    self.send_error_json(_srv_t("Eine GIF-Generierung läuft bereits.", "A GIF generation is already in progress."), 400)
+                    return
+            threading.Thread(target=_run_ai_generation_thread, args=(body,), daemon=True).start()
+            self.send_json({"ok": True, "status": "started"})
+            return
+
+        if path == "/api/ai/cancel":
+            with AI_STATE_LOCK:
+                AI_STATE["busy"] = False
+                AI_STATE["status_text"] = _srv_t("Abgebrochen", "Canceled")
+            cfg = load_config()
+            comfy_interrupt(cfg.get("comfyui_url") or "http://127.0.0.1:8188")
+            self.send_json({"ok": True})
+            return
+
+        if path == "/api/ai/download_model":
+            body = self.read_json_body()
+            model_url = body.get("model_url", "").strip()
+            folder_type = body.get("folder_type", "checkpoints").strip()
+            custom_filename = body.get("filename", "").strip()
+            if not model_url:
+                self.send_error_json("Keine Download-URL angegeben", 400)
+                return
+            
+            # Automatic discovery based on folder_type (checkpoints or text_encoders/clip)
+            dest_dir = get_comfy_model_folder(folder_type)
+            
+            # Fallback if manual comfy_dir was provided
+            if not dest_dir:
+                cfg = load_config()
+                comfy_dir = body.get("comfy_dir") or cfg.get("comfyui_dir", "").strip()
+                if comfy_dir and os.path.isdir(comfy_dir):
+                    sub = "text_encoders" if folder_type in ("text_encoders", "clip") else "checkpoints"
+                    if os.path.isdir(os.path.join(comfy_dir, "models", sub)):
+                        dest_dir = os.path.join(comfy_dir, "models", sub)
+                    elif os.path.isdir(os.path.join(comfy_dir, sub)):
+                        dest_dir = os.path.join(comfy_dir, sub)
+                    else:
+                        dest_dir = os.path.join(comfy_dir, "models", sub)
+            
+            if not dest_dir:
+                self.send_error_json("ComfyUI-Ordner konnte nicht automatisch gefunden werden.", 400)
+                return
+            
+            # Save detected base directory in config
+            try:
+                cfg = load_config()
+                base_dir = os.path.dirname(os.path.dirname(dest_dir)) if any(dest_dir.endswith(x) for x in ["checkpoints", "text_encoders", "clip"]) else dest_dir
+                if cfg.get("comfyui_dir") != base_dir:
+                    cfg["comfyui_dir"] = base_dir
+                    save_config(cfg)
+            except Exception:
+                pass
+            
+            with DOWNLOAD_STATE_LOCK:
+                if DOWNLOAD_STATE["downloading"]:
+                    self.send_error_json("Download läuft bereits.", 400)
+                    return
+            threading.Thread(target=_run_model_download_thread, args=(model_url, dest_dir, custom_filename), daemon=True).start()
+            self.send_json({"ok": True, "dest_dir": dest_dir})
             return
 
         if path == "/api/select_folder":

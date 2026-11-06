@@ -1,0 +1,123 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "{{UNET_NAME}}",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load MiniMax H3 / FastH3 UNet"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "{{CLIP_NAME}}",
+      "type": "minimax"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load Qwen3-VL Multimodal Text Encoder"
+    }
+  },
+  "3": {
+    "inputs": {
+      "vae_name": "{{VAE_NAME}}"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load MiniMax Video VAE"
+    }
+  },
+  "4": {
+    "inputs": {
+      "image": "{{IMAGE_FILENAME}}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Source Image"
+    }
+  },
+  "5": {
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "prompt": "{{PROMPT}}",
+      "width": {{WIDTH}},
+      "height": {{HEIGHT}},
+      "length": {{FRAMES}},
+      "first_frame": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 Image to Video Conditioning"
+    }
+  },
+  "7": {
+    "inputs": {
+      "seed": {{SEED}},
+      "steps": {{STEPS}},
+      "cfg": 1.0,
+      "sampler_name": "res_multistep",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "5",
+        1
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler MiniMax H3 (Fast 8-Step)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decode Video Frames"
+    }
+  },
+  "9": {
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Video Frames (Temp)"
+    }
+  }
+}

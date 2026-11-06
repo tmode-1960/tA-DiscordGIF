@@ -40,6 +40,8 @@ def create_backup(label: str = "auto") -> list[str]:
         os.path.join("web", "style.css"),
         os.path.join("web", "app.js"),
         os.path.join("web", "i18n.js"),
+        os.path.join("workflows", "workflows.json"),
+        os.path.join("workflows", "svd_xt.json"),
     ]
 
     for rel_path in files_to_backup:

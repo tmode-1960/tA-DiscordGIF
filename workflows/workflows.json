@@ -1,0 +1,114 @@
+[
+  {
+    "id": "minimax_h3",
+    "name": "MiniMax H3 (Hailuo) • Ultra Action & Character",
+    "description": "Fotorealistische Aktionen & Mimik (Essen, Trinken, Sprechen, Lachen, Greifen)",
+    "file": "minimax_h3.json",
+    "supports_prompt": true,
+    "default_frames": 44,
+    "default_fps": 12,
+    "default_steps": 8,
+    "vram_rec": "8 GB - 24 GB VRAM (INT8)",
+    "required_files": [
+      {
+        "id": "h3_unet",
+        "name": "MiniMax H3 / FastH3 UNet (14.5 GB)",
+        "filename": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "folder_type": "diffusion_models",
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "size_str": "14.5 GB",
+        "alternatives": [
+          "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
+          "minimax_h3_hybrid_fl2va_ref2va_b30-49-int8.safetensors",
+          "MiniMax_H3_Ref2VA_pruned_int8_convrot.safetensors",
+          "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "minimax_h3_fl2va_bf16.safetensors"
+        ]
+      },
+      {
+        "id": "h3_clip",
+        "name": "Qwen3-VL 32B Text Encoder (15.7 GB)",
+        "filename": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+        "folder_type": "text_encoders",
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+        "size_str": "15.7 GB",
+        "alternatives": [
+          "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
+          "qwen3vl_32b_minimax_h3_bf16.safetensors"
+        ]
+      },
+      {
+        "id": "h3_vae",
+        "name": "MiniMax H3 Video VAE (0.4 GB)",
+        "filename": "minimax_h3_video_vae_fp16.safetensors",
+        "folder_type": "vae",
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",
+        "size_str": "400 MB",
+        "alternatives": [
+          "minimax_h3_video_vae_fp16.safetensors",
+          "minimax_h3_video_vae_bf16.safetensors",
+          "minimax_h3_video_vae.safetensors",
+          "minimax_video_vae_fp16.safetensors",
+          "minimax_video_vae.safetensors"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ltx_video",
+    "name": "LTX-Video 2B • Fast Action & Motion",
+    "description": "Schnelle Basis-Bewegungen (Drehung, Nicken, Kamerazoom in ~15s)",
+    "file": "ltx_video.json",
+    "checkpoint": "ltx-video-2b-v0.9.1.safetensors",
+    "model_url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.1.safetensors",
+    "model_size": "4.7 GB",
+    "supports_prompt": true,
+    "default_frames": 44,
+    "default_fps": 12,
+    "vram_rec": "8 GB - 24 GB VRAM",
+    "required_files": [
+      {
+        "id": "ltx_ckpt",
+        "name": "LTX-Video Checkpoint (4.7 GB)",
+        "filename": "ltx-video-2b-v0.9.1.safetensors",
+        "folder_type": "checkpoints",
+        "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.1.safetensors",
+        "size_str": "4.7 GB"
+      },
+      {
+        "id": "t5_clip",
+        "name": "T5-XXL Text-Engine (4.8 GB)",
+        "filename": "t5xxl_fp8_e4m3fn.safetensors",
+        "folder_type": "text_encoders",
+        "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+        "size_str": "4.8 GB"
+      }
+    ]
+  },
+  {
+    "id": "svd_xt",
+    "name": "Stable Video Diffusion (SVD-XT) • Ambient Animation",
+    "description": "Sanfte Atembewegung & Looping (ignoriert Text-Prompts)",
+    "file": "svd_xt.json",
+    "checkpoint": "svd_xt.safetensors",
+    "model_url": "https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt/resolve/main/svd_xt.safetensors",
+    "model_size": "9.1 GB",
+    "supports_prompt": false,
+    "default_frames": 44,
+    "default_fps": 12,
+    "vram_rec": "8 GB - 24 GB VRAM",
+    "required_files": [
+      {
+        "id": "svd_ckpt",
+        "name": "SVD-XT Checkpoint (9.1 GB)",
+        "filename": "svd_xt.safetensors",
+        "folder_type": "checkpoints",
+        "url": "https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt/resolve/main/svd_xt.safetensors",
+        "size_str": "9.1 GB"
+      }
+    ]
+  }
+]

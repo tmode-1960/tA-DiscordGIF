@@ -1,0 +1,161 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "ltx-video-2b-v0.9.1.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load LTX-Video Checkpoint"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+      "type": "ltxv"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load LTX T5 Text Encoder"
+    }
+  },
+  "3": {
+    "inputs": {
+      "text": "{{PROMPT}}",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Action Prompt"
+    }
+  },
+  "4": {
+    "inputs": {
+      "text": "worst quality, inconsistent motion, blurry, jittery, distorted",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "5": {
+    "inputs": {
+      "frame_rate": {{FPS}},
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "LTXVConditioning",
+    "_meta": {
+      "title": "LTXV Conditioning"
+    }
+  },
+  "6": {
+    "inputs": {
+      "image": "{{IMAGE_FILENAME}}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Source Image"
+    }
+  },
+  "7": {
+    "inputs": {
+      "width": {{WIDTH}},
+      "height": {{HEIGHT}},
+      "length": {{FRAMES}},
+      "batch_size": 1,
+      "strength": {{STRENGTH}},
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "5",
+        1
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "LTXVImgToVideo",
+    "_meta": {
+      "title": "LTXV Image to Video"
+    }
+  },
+  "8": {
+    "inputs": {
+      "seed": {{SEED}},
+      "steps": {{STEPS}},
+      "cfg": {{CFG}},
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "7",
+        0
+      ],
+      "negative": [
+        "7",
+        1
+      ],
+      "latent_image": [
+        "7",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler LTX"
+    }
+  },
+  "9": {
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode Video"
+    }
+  },
+  "10": {
+    "inputs": {
+      "images": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Frames (Temp)"
+    }
+  }
+}

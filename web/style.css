@@ -579,4 +579,49 @@ dialog .actions {
   to { transform: rotate(360deg); }
 }
 
+/* AI Studio Extensions */
+.pill-btn {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.pill-btn:hover {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(124, 92, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.ai-dropzone:hover {
+  border-color: var(--accent) !important;
+  background: rgba(124, 92, 255, 0.05) !important;
+}
+
+.ai-status-badge.online .dot {
+  background: var(--accent2) !important;
+  box-shadow: 0 0 8px var(--accent2);
+}
+
+.ai-status-badge.offline .dot {
+  background: var(--mute) !important;
+}
+
+.ai-status-badge.busy .dot {
+  background: var(--warn) !important;
+  animation: pulse-warn 1s infinite;
+}
+
+@keyframes pulse-warn {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.7; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 [hidden] { display: none !important; }

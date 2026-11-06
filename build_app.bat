@@ -41,6 +41,7 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole ^
     --name "tA-DiscordGIF" ^
     --icon "app.ico" ^
     --add-data "web;web" ^
+    --add-data "workflows;workflows" ^
     --add-data "app.ico;." ^
     server.py
 
