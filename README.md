@@ -1,4 +1,4 @@
-# tA-DiscordGIF (v1.7)
+# tA-DiscordGIF (v2.0)
 
 A lightweight Windows desktop manager for animated GIFs with instant Discord integration, featuring the signature **thomo.ART** dark UI.
 

@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>thomo.ART DiscordGIF v1.7</title>
+<title>thomo.ART DiscordGIF v2.0</title>
 <link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="/style.css?v=1.7">
+<link rel="stylesheet" href="/style.css?v=2.0">
 <script>
   try {
     const t = localStorage.getItem("tadiscordgif.theme");
@@ -20,7 +20,7 @@
     <span class="logo">⚡</span>
     <span class="brand-thomo">thomo.ART</span>
     <b class="brand-title">DiscordGIF</b>
-    <span class="brand-version" id="brandVersion">v1.7</span>
+    <span class="brand-version" id="brandVersion">v2.0</span>
   </div>
 
   <div class="status" id="discordStatus">
@@ -159,6 +159,10 @@
       <label class="check" style="margin-top: 12px;">
         <input type="checkbox" id="chkAiPingPong">
         <span data-i18n="aiLoopSeamless" style="font-size: 12px;">Seamless Ping-Pong Loop</span>
+      </label>
+      <label class="check" style="margin-top: 8px;">
+        <input type="checkbox" id="chkAiReverse">
+        <span data-i18n="aiLoopReverse" style="font-size: 12px;">Reverse Direction</span>
       </label>
     </div>
   </section>
@@ -435,16 +439,46 @@
       <input type="text" id="editTagsInput">
     </label>
 
-    <div class="actions">
-      <button value="cancel" class="ghost" data-i18n="cancel">Cancel</button>
-      <button id="btnSaveEdit" value="ok" class="primary" data-i18n="save">Save</button>
+    <div class="actions" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button type="button" id="btnEditLoadInAi" class="ghost" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent);" data-i18n="btnOpenInAiStudio">✨ In AI Studio öffnen</button>
+        <button type="button" id="btnEditDelete" class="ghost danger" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--danger);" data-i18n="btnDelete">🗑️ Löschen</button>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button value="cancel" class="ghost" data-i18n="cancel">Cancel</button>
+        <button id="btnSaveEdit" value="ok" class="primary" data-i18n="save">Save</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<!-- Delete Confirmation Dialog -->
+<dialog id="deleteModal">
+  <form method="dialog" style="max-width: 380px; margin: 0 auto; gap: 14px;">
+    <h2 style="font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--danger); font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px;">
+      <span>🗑️</span>
+      <span data-i18n="deleteModalTitle">GIF löschen?</span>
+    </h2>
+
+    <div style="text-align: center; margin: 4px 0; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+      <img id="deletePreview" src="" alt="Preview" style="max-height: 140px; max-width: 100%; border-radius: 8px; border: 1px solid var(--line); object-fit: contain; background: rgba(0,0,0,0.3);">
+      <b id="deleteGifTitle" style="font-size: 13px; color: var(--text); word-break: break-word;"></b>
+    </div>
+
+    <p style="margin: 0; font-size: 12px; color: var(--mute); line-height: 1.4; text-align: center;" data-i18n="deleteModalWarning">
+      Möchtest du dieses GIF wirklich unwiderruflich von der Festplatte löschen? Diese Aktion kann nicht rückgängig gemacht werden.
+    </p>
+
+    <div class="actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px;">
+      <button type="button" id="btnCancelDelete" class="ghost" data-i18n="cancel">Abbrechen</button>
+      <button type="button" id="btnConfirmDelete" class="danger-fill" data-i18n="deleteBtnConfirm">🗑️ Löschen</button>
     </div>
   </form>
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/i18n.js?v=1.7"></script>
-<script src="/app.js?v=1.7"></script>
+<script src="/i18n.js?v=2.0"></script>
+<script src="/app.js?v=2.0"></script>
 </body>
 </html>

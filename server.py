@@ -29,7 +29,7 @@ import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-APP_VERSION = "1.7"
+APP_VERSION = "2.0"
 IS_FROZEN = getattr(sys, "frozen", False)
 BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
@@ -170,6 +170,7 @@ DEFAULT_CONFIG = {
     "ai_fps": 12,
     "ai_motion_bucket": 100,
     "ai_loop_mode": "pingpong",
+    "ai_reverse": False,
 }
 
 CUSTOM_GIF_INDEX: dict[str, dict] = {}
@@ -367,6 +368,17 @@ def scan_custom_directory(custom_dir: str) -> list[dict]:
                     tags = [category.lower()] if category else []
 
                     gid = "ext_" + hashlib.sha1(rel.encode("utf-8", "ignore")).hexdigest()[:10]
+                    base_no_ext = os.path.splitext(full_path)[0]
+                    meta_path = base_no_ext + ".meta.json"
+                    source_path = base_no_ext + ".source.png"
+                    ai_params = None
+                    if os.path.isfile(meta_path):
+                        try:
+                            with open(meta_path, "r", encoding="utf-8") as mfh:
+                                ai_params = json.load(mfh)
+                        except Exception:
+                            pass
+
                     item = {
                         "id": gid,
                         "title": title,
@@ -380,6 +392,9 @@ def scan_custom_directory(custom_dir: str) -> list[dict]:
                         "favorite": False,
                         "use_count": 0,
                         "created_at": int(os.path.getmtime(full_path)),
+                        "ai_params": ai_params,
+                        "has_ai_meta": bool(ai_params),
+                        "has_source": os.path.isfile(source_path),
                     }
                     results.append(item)
                     CUSTOM_GIF_INDEX[gid] = item
@@ -415,6 +430,21 @@ def get_active_library() -> list[dict]:
     for item in saved_lib:
         if item.get("filename"):
             CUSTOM_GIF_INDEX[item["id"]] = item
+            full_path = os.path.join(GIFS_DIR, item["filename"])
+            if not item.get("abs_path"):
+                item["abs_path"] = full_path
+            base_no_ext = os.path.splitext(full_path)[0]
+            meta_path = base_no_ext + ".meta.json"
+            source_path = base_no_ext + ".source.png"
+            if os.path.isfile(meta_path) and "ai_params" not in item:
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as mfh:
+                        item["ai_params"] = json.load(mfh)
+                        item["has_ai_meta"] = True
+                except Exception:
+                    pass
+            if os.path.isfile(source_path):
+                item["has_source"] = True
     return saved_lib
 
 def select_folder_dialog(initial_dir: str = "", title: str = "Ordner auswählen") -> str | None:
@@ -851,7 +881,7 @@ def comfy_interrupt(comfy_url: str) -> bool:
         print("[ai] Interrupt error:", ex)
         return False
 
-def compile_frames_to_gif(frames_dir: str, output_path: str, fps: int = 12, scale_width: int = 400, pingpong: bool = True) -> bool:
+def compile_frames_to_gif(frames_dir: str, output_path: str, fps: int = 12, scale_width: int = 400, pingpong: bool = True, reverse: bool = False) -> bool:
     ffmpeg = get_ffmpeg_path()
     if not ffmpeg:
         print("[ai] FFmpeg not found!")
@@ -859,19 +889,36 @@ def compile_frames_to_gif(frames_dir: str, output_path: str, fps: int = 12, scal
 
     input_pattern = os.path.join(frames_dir, "frame_%05d.png")
     if pingpong:
-        filter_str = (
-            f"[0:v]reverse[r];"
-            f"[0:v][r]concat=n=2:v=1[full];"
-            f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
-            f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
-            f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-        )
+        if reverse:
+            filter_str = (
+                f"[0:v]reverse[r];"
+                f"[r][0:v]concat=n=2:v=1[full];"
+                f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+            )
+        else:
+            filter_str = (
+                f"[0:v]reverse[r];"
+                f"[0:v][r]concat=n=2:v=1[full];"
+                f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+            )
     else:
-        filter_str = (
-            f"[0:v]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
-            f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
-            f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-        )
+        if reverse:
+            filter_str = (
+                f"[0:v]reverse[r];"
+                f"[r]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+            )
+        else:
+            filter_str = (
+                f"[0:v]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+            )
 
     cmd = [
         ffmpeg, "-y",
@@ -1156,10 +1203,42 @@ def _run_ai_generation_thread(params: dict):
         if width > height and scale_width < 480:
             scale_width = 480
         pingpong = bool(params.get("loop_mode", "pingpong") == "pingpong")
+        reverse = bool(params.get("reverse", False))
 
-        compile_ok = compile_frames_to_gif(temp_frames_dir, final_gif_path, fps=fps, scale_width=scale_width, pingpong=pingpong)
+        compile_ok = compile_frames_to_gif(temp_frames_dir, final_gif_path, fps=fps, scale_width=scale_width, pingpong=pingpong, reverse=reverse)
         if not compile_ok:
             raise RuntimeError("FFmpeg GIF-Erstellung fehlgeschlagen.")
+
+        # Save source image & meta.json next to final GIF
+        base_no_ext = os.path.splitext(final_gif_path)[0]
+        source_path = base_no_ext + ".source.png"
+        try:
+            with open(source_path, "wb") as sf:
+                sf.write(img_bytes)
+        except Exception as ex:
+            print("[ai] Error saving source image:", ex)
+
+        ai_meta = {
+            "prompt": prompt_txt,
+            "workflow_id": workflow_id,
+            "motion_bucket": motion_bucket,
+            "resolution": params.get("resolution", "high"),
+            "frames": frames,
+            "fps": fps,
+            "width": width,
+            "height": height,
+            "scale_width": scale_width,
+            "loop_mode": "pingpong" if pingpong else "normal",
+            "reverse": reverse,
+            "title": user_title,
+            "created_at": int(time.time()),
+        }
+        meta_path = base_no_ext + ".meta.json"
+        try:
+            with open(meta_path, "w", encoding="utf-8") as mf:
+                json.dump(ai_meta, mf, indent=2, ensure_ascii=False)
+        except Exception as ex:
+            print("[ai] Error saving meta json:", ex)
 
         # 8. Register in library
         file_size_mb = round(os.path.getsize(final_gif_path) / (1024 * 1024), 2)
@@ -1179,6 +1258,9 @@ def _run_ai_generation_thread(params: dict):
             "use_count": 0,
             "created_at": int(time.time()),
             "file_size_mb": file_size_mb,
+            "ai_params": ai_meta,
+            "has_ai_meta": True,
+            "has_source": True,
         }
 
         CUSTOM_GIF_INDEX[gid] = gif_item
@@ -1609,6 +1691,77 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(dict(DOWNLOAD_STATE))
             return
 
+        if path == "/api/ai/get_gif_source":
+            query = urllib.parse.parse_qs(url_parsed.query)
+            gid = query.get("id", [""])[0]
+            item = CUSTOM_GIF_INDEX.get(gid)
+            if not item:
+                lib = load_library()
+                item = next((x for x in lib if x.get("id") == gid), None)
+
+            if not item:
+                self.send_json({"ok": False, "error": "GIF nicht gefunden"})
+                return
+
+            abs_path = item.get("abs_path")
+            if not abs_path or not os.path.isfile(abs_path):
+                if item.get("filename"):
+                    abs_path = os.path.join(GIFS_DIR, item["filename"])
+
+            if not abs_path or not os.path.isfile(abs_path):
+                self.send_json({"ok": False, "error": "GIF-Datei nicht gefunden"})
+                return
+
+            base_no_ext, _ = os.path.splitext(abs_path)
+            meta_path = base_no_ext + ".meta.json"
+            source_img_path = base_no_ext + ".source.png"
+
+            ai_params = None
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as fh:
+                        ai_params = json.load(fh)
+                except Exception as ex:
+                    print("[ai] Error reading meta file:", ex)
+
+            if not ai_params and item.get("ai_params"):
+                ai_params = item.get("ai_params")
+
+            image_b64 = None
+            if os.path.isfile(source_img_path):
+                try:
+                    with open(source_img_path, "rb") as fh:
+                        b_data = fh.read()
+                        image_b64 = "data:image/png;base64," + base64.b64encode(b_data).decode("ascii")
+                except Exception as ex:
+                    print("[ai] Error reading source image:", ex)
+
+            if not image_b64:
+                try:
+                    from PIL import Image
+                    import io
+                    with Image.open(abs_path) as im:
+                        im.seek(0)
+                        frame = im.convert("RGBA")
+                        buf = io.BytesIO()
+                        frame.save(buf, format="PNG")
+                        b_data = buf.getvalue()
+                        image_b64 = "data:image/png;base64," + base64.b64encode(b_data).decode("ascii")
+                except Exception as ex:
+                    print("[ai] Frame 0 extraction error:", ex)
+
+            if not image_b64:
+                self.send_json({"ok": False, "error": "Bilddaten konnten nicht geladen werden"})
+                return
+
+            self.send_json({
+                "ok": True,
+                "image_data": image_b64,
+                "ai_params": ai_params or {},
+                "title": (ai_params and ai_params.get("title")) or item.get("title", ""),
+            })
+            return
+
         # Static file delivery
         if path.startswith("/gifs/"):
             gif_filename = os.path.basename(urllib.parse.unquote(path[6:]))
@@ -1838,16 +1991,28 @@ class AppHandler(BaseHTTPRequestHandler):
             gid = body.get("id")
             lib = load_library()
             item_to_remove = next((item for item in lib if item["id"] == gid), None)
+            if not item_to_remove:
+                item_to_remove = CUSTOM_GIF_INDEX.get(gid)
             if item_to_remove:
-                if item_to_remove.get("filename"):
+                file_path = item_to_remove.get("abs_path")
+                if not file_path and item_to_remove.get("filename"):
                     file_path = os.path.join(GIFS_DIR, item_to_remove["filename"])
-                    if os.path.exists(file_path):
-                        try:
-                            os.remove(file_path)
-                        except Exception:
-                            pass
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+                    base_no_ext = os.path.splitext(file_path)[0]
+                    for extra in [".meta.json", ".source.png"]:
+                        p = base_no_ext + extra
+                        if os.path.exists(p):
+                            try:
+                                os.remove(p)
+                            except Exception:
+                                pass
                 lib = [x for x in lib if x["id"] != gid]
                 save_library(lib)
+                CUSTOM_GIF_INDEX.pop(gid, None)
                 self.send_json({"ok": True})
             else:
                 self.send_error_json("GIF not found", 404)

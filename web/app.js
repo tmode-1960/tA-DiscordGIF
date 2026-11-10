@@ -66,7 +66,17 @@
   const editTitleInput = document.getElementById("editTitleInput");
   const editTagsInput = document.getElementById("editTagsInput");
   const btnSaveEdit = document.getElementById("btnSaveEdit");
+  const btnEditLoadInAi = document.getElementById("btnEditLoadInAi");
+  const btnEditDelete = document.getElementById("btnEditDelete");
   let currentlyEditingGif = null;
+
+  // Delete Confirmation Modal Elements
+  const dlgDelete = document.getElementById("deleteModal");
+  const deletePreview = document.getElementById("deletePreview");
+  const deleteGifTitle = document.getElementById("deleteGifTitle");
+  const btnConfirmDelete = document.getElementById("btnConfirmDelete");
+  const btnCancelDelete = document.getElementById("btnCancelDelete");
+  let currentlyDeletingGif = null;
   const toastEl = document.getElementById("toast");
 
   // AI Studio Elements & State
@@ -92,6 +102,7 @@
   const aiFramesSelect = document.getElementById("aiFramesSelect");
   const aiFpsSelect = document.getElementById("aiFpsSelect");
   const chkAiPingPong = document.getElementById("chkAiPingPong");
+  const chkAiReverse = document.getElementById("chkAiReverse");
 
   const aiStatusBadge = document.getElementById("aiStatusBadge");
   const aiStatusDot = document.getElementById("aiStatusDot");
@@ -422,6 +433,46 @@
           dlgEdit.close();
           currentlyEditingGif = null;
         }
+      });
+    }
+
+    if (btnEditLoadInAi) {
+      btnEditLoadInAi.addEventListener("click", () => {
+        const target = currentlyEditingGif;
+        dlgEdit.close();
+        currentlyEditingGif = null;
+        if (target) {
+          loadGifIntoAiStudio(target);
+        }
+      });
+    }
+
+    if (btnEditDelete) {
+      btnEditDelete.addEventListener("click", () => {
+        const target = currentlyEditingGif;
+        if (dlgEdit && dlgEdit.open) dlgEdit.close();
+        currentlyEditingGif = null;
+        if (target) {
+          openDeleteModal(target);
+        }
+      });
+    }
+
+    if (btnConfirmDelete) {
+      btnConfirmDelete.addEventListener("click", async () => {
+        const gif = currentlyDeletingGif;
+        if (dlgDelete && dlgDelete.open) dlgDelete.close();
+        currentlyDeletingGif = null;
+        if (gif) {
+          await executeDelete(gif);
+        }
+      });
+    }
+
+    if (btnCancelDelete) {
+      btnCancelDelete.addEventListener("click", () => {
+        if (dlgDelete && dlgDelete.open) dlgDelete.close();
+        currentlyDeletingGif = null;
       });
     }
 
@@ -928,10 +979,12 @@
       motion_bucket: aiMotionRange ? parseInt(aiMotionRange.value, 10) : 100,
       frames: aiFramesSelect ? parseInt(aiFramesSelect.value, 10) : 44,
       fps: aiFpsSelect ? parseInt(aiFpsSelect.value, 10) : 12,
+      resolution: resProfile,
       width: width,
       height: height,
       scale_width: scaleWidth,
       loop_mode: chkAiPingPong && chkAiPingPong.checked ? "pingpong" : "normal",
+      reverse: !!(chkAiReverse && chkAiReverse.checked),
       title: aiTitleInput ? aiTitleInput.value.trim() : "",
     };
 
@@ -1277,10 +1330,28 @@
     }
   }
 
-  async function deleteGif(gif, e) {
-    e.stopPropagation();
-    if (!confirm(t("deleteConfirm", { title: gif.title }))) return;
+  function openDeleteModal(gif, e) {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (!gif || !gif.id) return;
+    currentlyDeletingGif = gif;
 
+    if (deleteGifTitle) deleteGifTitle.textContent = gif.title || "GIF";
+    if (deletePreview) {
+      const imgSrc = gif.url || (gif.filename ? `/gifs/${encodeURIComponent(gif.filename)}` : "");
+      deletePreview.src = imgSrc;
+    }
+
+    if (dlgDelete && typeof dlgDelete.showModal === "function") {
+      dlgDelete.showModal();
+    } else {
+      if (confirm(t("deleteConfirm", { title: gif.title }))) {
+        executeDelete(gif);
+      }
+    }
+  }
+
+  async function executeDelete(gif) {
+    if (!gif || !gif.id) return;
     try {
       const res = await fetch("/api/gifs/delete", {
         method: "POST",
@@ -1290,6 +1361,7 @@
       const data = await res.json();
       if (data.ok) {
         showToast(t("toastDeleted"), "ok");
+        if (dlgEdit && dlgEdit.open) dlgEdit.close();
         await loadGifs();
       } else {
         showToast(data.error || "Error", "err");
@@ -1297,6 +1369,10 @@
     } catch (e) {
       showToast("Error deleting", "err");
     }
+  }
+
+  function deleteGif(gif, e) {
+    openDeleteModal(gif, e);
   }
 
   // --- Rendering Helpers ---
@@ -1480,9 +1556,6 @@
       .map((g) => {
         const imgSrc = g.url || (g.filename ? `/gifs/${encodeURIComponent(g.filename)}` : "");
         const tagsHtml = (g.tags || []).map((t) => `<span class="badge">${escapeHtml(t)}</span>`).join("");
-        const actionHtml = g.is_custom_folder
-          ? (g.category ? `<span class="badge" style="opacity:0.75; font-size:11px;">📁 ${escapeHtml(g.category)}</span>` : "")
-          : `<button class="mini danger ghost" data-action="delete" title="${t("deleteTitle")}">🗑️</button>`;
 
         return `
           <div class="gif-card" data-id="${g.id}">
@@ -1496,15 +1569,19 @@
               <div class="gif-info-row">
                 <span class="gif-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</span>
                 <div style="display:flex; align-items:center; gap:4px;">
+                  ${(g.category === "AI-Generated" || g.has_ai_meta || g.ai_params) ? `
+                    <button class="mini ghost" data-action="remix" title="${t("aiRemixBtn")}" style="padding: 2px 5px; font-size: 11px; opacity: 0.9; cursor: pointer; border-radius: 4px; color: var(--accent);">✨</button>
+                  ` : ""}
                   <button class="mini ghost" data-action="edit" title="${t("editBtn")}" style="padding: 2px 5px; font-size: 11px; opacity: 0.85; cursor: pointer; border-radius: 4px;">✏️</button>
                   <button class="gif-fav-btn ${g.favorite ? "active" : ""}" data-action="fav" title="${t("favoriteTitle")}">
                     ${g.favorite ? "★" : "☆"}
                   </button>
+                  <button class="mini danger ghost" data-action="delete" title="${t("deleteTitle")}" style="padding: 2px 5px; font-size: 11px; cursor: pointer; border-radius: 4px;">🗑️</button>
                 </div>
               </div>
               <div class="gif-tags">${tagsHtml}</div>
               <div class="gif-actions">
-                ${actionHtml}
+                ${g.category ? `<span class="badge" style="opacity:0.75; font-size:11px;">📁 ${escapeHtml(g.category)}</span>` : ""}
               </div>
             </div>
           </div>
@@ -1519,6 +1596,13 @@
 
       card.querySelector(".gif-thumb-wrap").addEventListener("click", () => sendGif(gif));
       card.querySelector('[data-action="fav"]').addEventListener("click", (e) => toggleFavorite(gif, e));
+      const remixBtn = card.querySelector('[data-action="remix"]');
+      if (remixBtn) {
+        remixBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          loadGifIntoAiStudio(gif);
+        });
+      }
       const editBtn = card.querySelector('[data-action="edit"]');
       if (editBtn) {
         editBtn.addEventListener("click", (e) => {
@@ -1531,6 +1615,81 @@
         delBtn.addEventListener("click", (e) => deleteGif(gif, e));
       }
     });
+  }
+
+  async function loadGifIntoAiStudio(gif) {
+    if (!gif || !gif.id) return;
+    showToast(t("aiRemixLoading"), "ok");
+
+    try {
+      const res = await fetch(`/api/ai/get_gif_source?id=${encodeURIComponent(gif.id)}`);
+      const data = await res.json();
+      if (!data.ok || !data.image_data) {
+        showToast(data.error || "Fehler beim Laden des GIFs", "err");
+        return;
+      }
+
+      // 1. Switch active tab to AI Studio
+      const aiTabBtn = sourceSeg ? sourceSeg.querySelector('[data-source="ai"]') : null;
+      if (aiTabBtn) {
+        aiTabBtn.click();
+      }
+
+      // 2. Set source image preview & state
+      aiSelectedImageData = data.image_data;
+      if (aiSourcePreview) {
+        aiSourcePreview.src = aiSelectedImageData;
+        aiSourcePreview.style.display = "block";
+      }
+      if (aiDropPlaceholder) aiDropPlaceholder.style.display = "none";
+      if (btnClearAiImage) btnClearAiImage.style.display = "inline-block";
+      if (aiImageInfo) {
+        aiImageInfo.textContent = (data.title || gif.title || "GIF Frame") + " (Source)";
+      }
+
+      // 3. Populate AI parameters if preserved
+      const p = data.ai_params || {};
+      if (aiPromptInput) {
+        aiPromptInput.value = p.prompt || "";
+      }
+      if (p.workflow_id && aiModelSelect) {
+        aiModelSelect.value = p.workflow_id;
+      }
+      if (p.motion_bucket !== undefined && aiMotionRange) {
+        aiMotionRange.value = p.motion_bucket;
+        if (aiMotionVal) aiMotionVal.textContent = p.motion_bucket;
+      }
+      if (p.resolution && aiResolutionSelect) {
+        aiResolutionSelect.value = p.resolution;
+      }
+      if (p.frames && aiFramesSelect) {
+        aiFramesSelect.value = String(p.frames);
+      }
+      if (p.fps && aiFpsSelect) {
+        aiFpsSelect.value = String(p.fps);
+      }
+      if (chkAiPingPong) {
+        chkAiPingPong.checked = (p.loop_mode === "pingpong");
+      }
+      if (chkAiReverse) {
+        chkAiReverse.checked = !!p.reverse;
+      }
+      if (aiTitleInput) {
+        aiTitleInput.value = p.title || data.title || gif.title || "";
+      }
+
+      // 4. Focus prompt input smoothly
+      if (aiPromptInput) {
+        setTimeout(() => {
+          aiPromptInput.focus();
+          aiPromptInput.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 150);
+      }
+      showToast(t("aiRemixLoaded"), "ok");
+    } catch (err) {
+      console.error("loadGifIntoAiStudio error:", err);
+      showToast(t("toastConnectionError"), "err");
+    }
   }
 
   function showToast(msg, type = "ok") {
