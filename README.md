@@ -1,4 +1,6 @@
-# tA-DiscordGIF (v2.0)
+[🇬🇧 English](README.md) | [🇩🇪 Deutsch](README.de.md)
+
+# tA-DiscordGIF (v2.5)
 
 A lightweight Windows desktop manager for animated GIFs with instant Discord integration, featuring the signature **thomo.ART** dark UI.
 
@@ -6,7 +8,7 @@ A lightweight Windows desktop manager for animated GIFs with instant Discord int
 
 ## ✨ Features
 
-- **Sleek Dark Theme:** Inspired by the *tA-MusicMaker* interface — clean sidebar, responsive card grid, and fluid animations.
+- **Sleek Dark & Light Theme:** Inspired by the *tA-MusicMaker* interface — clean sidebar, responsive card grid, and fluid animations.
 - **Direct Discord Insertion:**
   - Select any GIF with a single click.
   - Automatically restores focus to Discord.
@@ -19,7 +21,13 @@ A lightweight Windows desktop manager for animated GIFs with instant Discord int
 - **Tagging & Live Search:** Quick real-time filtering by tags, titles, and favorites.
 - **Drag & Drop Import:** Easily drop local GIF files into the app or paste web URLs.
 - **Folder & Subfolder Categorization:** Automatically turns subfolders in your GIF directory into category tabs.
-- **Local AI GIF Generation:** Generate custom animated GIFs directly inside the app powered by **MiniMax H3 (Hailuo)** and **LTX-Video** via local ComfyUI integration!
+- **Local AI GIF Studio (ComfyUI):** Generate custom animated GIFs directly inside the app powered by **MiniMax H3 (Hailuo)**, **LTX-Video**, and **SVD-XT**:
+  - **Text Overlay:** Add crisp, outlined meme/caption text directly onto generated GIFs (position: *Top* / *Bottom*; effects: *Fade-In*, *Delayed (~1s)*, or *Static*).
+  - **Loop Modes:** Ping-Pong (forward + backward) and **Reverse Loop** options for seamless animations.
+  - **AI Studio Remix:** Reuse prompts and settings from existing AI-generated GIFs directly in the studio.
+  - **Prompt Tools & Context Menu:** One-click **Copy** / **Clear** prompt buttons and a built-in right-click context menu (Cut, Copy, Paste, Select All) inside the desktop window.
+  - **Zero-Config GIF Compilation:** Automatically detects `ffmpeg` (PATH, WinGet, or ComfyUI's embedded `imageio_ffmpeg`) and falls back to **Pillow** if `ffmpeg` is not installed.
+  - **Smart Model Diagnostics:** Detects missing ComfyUI models, models placed in the wrong `ComfyUI/models/...` subfolder, or models that require a ComfyUI restart to appear.
 
 ---
 
@@ -92,8 +100,9 @@ Click the **`⚙ Settings`** button in the top-right header:
 
 #### Left Column (Controls & Import)
 * **Source Switcher:**
-  * **`📁 Local GIFs` (Meine GIFs):** Displays your offline collection from your local PC folder.
+  * **`📁 Local GIFs`:** Displays your offline collection from your local PC folder.
   * **`🌐 Discord / Tenor`:** Lets you browse live Discord/Tenor trending categories and search online GIFs in real time.
+  * **`🎬 AI Studio`:** Opens the local ComfyUI GIF generator.
 * **Search & Filters:**
   * **`🔍 Search input`:** Fast live filter by name, tag, or filename.
   * **`All` / `⭐ Favorites`:** Toggle between all GIFs and your starred favorites.
@@ -113,10 +122,11 @@ Click the **`⚙ Settings`** button in the top-right header:
 * **`Reload Folder` (`🔄`):**  
   Click this button whenever you add, rename, or delete GIF files directly in Windows Explorer to refresh your collection immediately.
 * **GIF Cards:**
-  * **Click Card / `⚡ In Discord einfügen`:** Automatically pastes the GIF into Discord.
+  * **Click Card / `⚡ Paste to Discord`:** Automatically pastes the GIF into Discord.
   * **`⭐` Star:** Marks the GIF as a favorite.
   * **`✏️` Edit:** Opens a dialog to edit the title or tags.
-  * **`🗑️` Delete:** Deletes the GIF.
+  * **`🎬` Remix (for AI GIFs):** Loads the GIF's prompt/settings back into the AI Studio.
+  * **`🗑️` Delete:** Opens a confirmation modal to safely delete the GIF.
   * **`📥 Save to Folder` (in Tenor mode):** Downloads an online Tenor GIF directly to your local PC collection!
 
 ---
@@ -129,7 +139,7 @@ tA-DiscordGIF includes a built-in AI video generator powered by your local **Com
 * **MiniMax H3 (Hailuo) • Ultra Action & Character:**  
   Specialized in photorealistic human interactions, facial expressions, and dynamic character motions (eating, drinking, speaking, laughing, etc.). Generates fluid motion in only **8 steps**.
 * **LTX-Video:** Ultra-fast, high-resolution text/image-to-video diffusion.
-* **SVD-XT (Stable Video Diffusion):** High-consistency video generation from still images.
+* **SVD-XT (Stable Video Diffusion):** High-consistency video generation from still images (gentle breathing/camera motion).
 
 ---
 
@@ -144,7 +154,7 @@ tA-DiscordGIF includes a built-in AI video generator powered by your local **Com
    * NVIDIA GPU with **8 GB to 24 GB VRAM**.
    * Thanks to INT8 quantization, MiniMax H3 runs smoothly even on mid-range GPUs (8 GB – 12 GB VRAM).
 3. **Model Files for MiniMax H3:**  
-   Download the following safetensors files and place them into your respective ComfyUI directories:
+   Download the following safetensors files (or use the built-in downloader in AI Studio) and place them into your respective ComfyUI directories:
    * **Diffusion Model** (`ComfyUI/models/diffusion_models/`):  
      `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (~14.5 GB)  
      *(Alternative: `fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors`)*
@@ -156,10 +166,10 @@ tA-DiscordGIF includes a built-in AI video generator powered by your local **Com
 
 ### 🚀 How to Generate
 1. Launch ComfyUI on your machine.
-2. In **tA-DiscordGIF**, open the AI Generation panel.
-3. Select the **MiniMax H3** workflow.
-4. Enter your prompt (or upload an initial image), configure frames/fps, and click **Generate**.
-5. Once finished, the GIF is automatically added to your library, ready to be sent to Discord with **`Alt + G`**!
+2. In **tA-DiscordGIF**, open the **AI Studio** panel.
+3. Select a workflow (e.g. **MiniMax H3**), check that all required models show as **Installed** (if a file is in the wrong subfolder or ComfyUI needs a restart, a warning hint is displayed automatically).
+4. Enter your motion prompt (use the **Copy** / **Clear** buttons or Quick Ideas if helpful) or upload an initial image, configure frames/fps/loop mode (**Ping-Pong** or **Reverse**), and optionally enable **Add text overlay** (*Top* / *Bottom*, *Fade-In* / *Delayed (~1s)* / *Static*).
+5. Click **Generate**. Once finished, the GIF is automatically compiled and added to your library, ready to be sent to Discord with **`Alt + G`**!
 
 ---
 

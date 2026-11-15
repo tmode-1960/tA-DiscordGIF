@@ -29,7 +29,7 @@ import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-APP_VERSION = "2.0"
+APP_VERSION = "2.5"
 IS_FROZEN = getattr(sys, "frozen", False)
 BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
@@ -704,20 +704,78 @@ DOWNLOAD_STATE = {
 DOWNLOAD_STATE_LOCK = threading.Lock()
 
 def get_ffmpeg_path() -> str | None:
-    """Find local or system ffmpeg executable."""
+    """Find local, bundled, package-manager, ComfyUI, or system ffmpeg executable."""
     found = shutil.which("ffmpeg")
     if found:
         return found
-    local_bin = os.path.join(APP_DIR, "bin", "ffmpeg.exe")
-    if os.path.isfile(local_bin):
-        return local_bin
-    for probe in [
+
+    candidates = [
+        os.path.join(APP_DIR, "bin", "ffmpeg.exe"),
+        os.path.join(BUNDLE_DIR, "bin", "ffmpeg.exe"),
         r"C:\PortableApps\FFmpeg\bin\ffmpeg.exe",
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\FFmpeg\bin\ffmpeg.exe",
-    ]:
-        if os.path.isfile(probe):
+        r"C:\Program Files (x86)\FFmpeg\bin\ffmpeg.exe",
+        r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+    ]
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    user_profile = os.environ.get("USERPROFILE", "")
+    if local_app_data:
+        candidates.append(os.path.join(local_app_data, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
+    if user_profile:
+        candidates.append(os.path.join(user_profile, "scoop", "shims", "ffmpeg.exe"))
+
+    for probe in candidates:
+        if probe and os.path.isfile(probe):
             return probe
+
+    # Check WinGet packages folder
+    if local_app_data:
+        winget_pkgs = os.path.join(local_app_data, "Microsoft", "WinGet", "Packages")
+        if os.path.isdir(winget_pkgs):
+            import glob
+            matches = glob.glob(os.path.join(winget_pkgs, "*FFmpeg*", "**", "ffmpeg.exe"), recursive=True)
+            if matches:
+                return matches[0]
+
+    # Check ComfyUI embedded python imageio_ffmpeg or sibling ffmpeg
+    try:
+        cfg = load_config()
+        comfy_roots = []
+        saved_comfy = (cfg.get("comfyui_dir") or "").strip()
+        if saved_comfy:
+            comfy_roots.append(saved_comfy)
+            comfy_roots.append(os.path.dirname(saved_comfy))
+        ckpt_dir = auto_detect_comfy_checkpoints()
+        if ckpt_dir:
+            comfy_dir = os.path.dirname(os.path.dirname(ckpt_dir))
+            comfy_roots.append(comfy_dir)
+            comfy_roots.append(os.path.dirname(comfy_dir))
+
+        import glob
+        for root in comfy_roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for pattern in [
+                os.path.join(root, "python_embeded", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
+                os.path.join(root, "python_embedded", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg*.exe"),
+                os.path.join(root, "ffmpeg", "bin", "ffmpeg.exe"),
+            ]:
+                matches = glob.glob(pattern)
+                if matches and os.path.isfile(matches[0]):
+                    return matches[0]
+    except Exception:
+        pass
+
+    # Check imageio_ffmpeg in current Python environment
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.isfile(exe):
+            return exe
+    except Exception:
+        pass
+
     return None
 
 def get_workflows_list() -> list[dict]:
@@ -740,6 +798,20 @@ def check_comfyui_status(comfy_url: str = "") -> dict:
         "ffmpeg_installed": ffmpeg_exe is not None,
         "ffmpeg_path": ffmpeg_exe or "",
         "installed_models": [],
+        "models_by_folder": {
+            "checkpoints": [],
+            "text_encoders": [],
+            "diffusion_models": [],
+            "vae": [],
+            "loras": [],
+        },
+        "disk_models_by_folder": {
+            "checkpoints": [],
+            "text_encoders": [],
+            "diffusion_models": [],
+            "vae": [],
+            "loras": [],
+        },
         "devices": [],
         "workflows": get_workflows_list(),
     }
@@ -753,15 +825,15 @@ def check_comfyui_status(comfy_url: str = "") -> dict:
         result["online"] = False
         return result
 
-    # Check available checkpoints & text encoders in ComfyUI
-    for loader, param in [
-        ("ImageOnlyCheckpointLoader", "ckpt_name"),
-        ("CheckpointLoaderSimple", "ckpt_name"),
-        ("CLIPLoader", "clip_name"),
-        ("DualCLIPLoader", "clip_name1"),
-        ("UNETLoader", "unet_name"),
-        ("VAELoader", "vae_name"),
-        ("LoraLoader", "lora_name"),
+    # Check available models per loader directly from ComfyUI (source of truth for what ComfyUI can load)
+    for loader, param, folder_type in [
+        ("ImageOnlyCheckpointLoader", "ckpt_name", "checkpoints"),
+        ("CheckpointLoaderSimple", "ckpt_name", "checkpoints"),
+        ("CLIPLoader", "clip_name", "text_encoders"),
+        ("DualCLIPLoader", "clip_name1", "text_encoders"),
+        ("UNETLoader", "unet_name", "diffusion_models"),
+        ("VAELoader", "vae_name", "vae"),
+        ("LoraLoader", "lora_name", "loras"),
     ]:
         try:
             req_ckpt = urllib.request.Request(f"{url}/object_info/{loader}", headers={"User-Agent": "tA-DiscordGIF"})
@@ -769,13 +841,16 @@ def check_comfyui_status(comfy_url: str = "") -> dict:
                 info = json.loads(resp_ckpt.read().decode("utf-8"))
                 ckpts = info.get(loader, {}).get("input", {}).get("required", {}).get(param, [[]])[0]
                 if isinstance(ckpts, list):
+                    bucket = result["models_by_folder"][folder_type]
                     for c in ckpts:
+                        if c not in bucket:
+                            bucket.append(c)
                         if c not in result["installed_models"]:
                             result["installed_models"].append(c)
         except Exception:
             pass
 
-    # Also check if models physically exist in auto-detected checkpoints & text_encoders folders
+    # Also scan local ComfyUI folders for diagnostics (wrong folder / restart needed) without marking them as ComfyUI-ready
     auto_dir = auto_detect_comfy_checkpoints()
     result["detected_checkpoints_dir"] = auto_dir or ""
     if auto_dir and os.path.isdir(auto_dir):
@@ -784,17 +859,20 @@ def check_comfyui_status(comfy_url: str = "") -> dict:
                 low = f.lower()
                 if low.endswith(".safetensors") or low.endswith(".ckpt"):
                     rel = os.path.relpath(os.path.join(root, f), auto_dir).replace("\\", "/")
-                    if rel not in result["installed_models"]:
-                        result["installed_models"].append(rel)
-                    if f not in result["installed_models"]:
-                        result["installed_models"].append(f)
+                    for entry in (rel, f):
+                        if entry not in result["disk_models_by_folder"]["checkpoints"]:
+                            result["disk_models_by_folder"]["checkpoints"].append(entry)
 
         base_dir = os.path.dirname(auto_dir.rstrip(r"\/"))
-        for sub in [
-            "text_encoders", "clip", "models/text_encoders", "models/clip",
-            "diffusion_models", "unet", "models/diffusion_models", "models/unet",
-            "vae", "models/vae", "loras", "models/loras"
-        ]:
+        sub_map = [
+            ("text_encoders", "text_encoders"), ("clip", "text_encoders"),
+            ("models/text_encoders", "text_encoders"), ("models/clip", "text_encoders"),
+            ("diffusion_models", "diffusion_models"), ("unet", "diffusion_models"),
+            ("models/diffusion_models", "diffusion_models"), ("models/unet", "diffusion_models"),
+            ("vae", "vae"), ("models/vae", "vae"),
+            ("loras", "loras"), ("models/loras", "loras"),
+        ]
+        for sub, folder_type in sub_map:
             sub_dir = os.path.join(base_dir, sub)
             if os.path.isdir(sub_dir):
                 for root, _, files in os.walk(sub_dir):
@@ -802,10 +880,9 @@ def check_comfyui_status(comfy_url: str = "") -> dict:
                         low = f.lower()
                         if low.endswith(".safetensors") or low.endswith(".ckpt") or low.endswith(".bin"):
                             rel = os.path.relpath(os.path.join(root, f), sub_dir).replace("\\", "/")
-                            if rel not in result["installed_models"]:
-                                result["installed_models"].append(rel)
-                            if f not in result["installed_models"]:
-                                result["installed_models"].append(f)
+                            for entry in (rel, f):
+                                if entry not in result["disk_models_by_folder"][folder_type]:
+                                    result["disk_models_by_folder"][folder_type].append(entry)
 
     return result
 
@@ -850,21 +927,46 @@ def comfy_queue_prompt(comfy_url: str, workflow_dict: dict, client_id: str) -> s
             return res.get("prompt_id", "")
     except urllib.error.HTTPError as he:
         err_body = he.read().decode("utf-8", "ignore")
+        err_json = None
         try:
             err_json = json.loads(err_body)
-            if "node_errors" in err_json:
+        except Exception:
+            err_json = None
+
+        if isinstance(err_json, dict):
+            folder_by_class = {
+                "CLIPLoader": "models/text_encoders",
+                "DualCLIPLoader": "models/text_encoders",
+                "UNETLoader": "models/diffusion_models",
+                "VAELoader": "models/vae",
+                "CheckpointLoaderSimple": "models/checkpoints",
+                "ImageOnlyCheckpointLoader": "models/checkpoints",
+                "LoraLoader": "models/loras",
+            }
+            if err_json.get("node_errors"):
                 msgs = []
-                for n_id, n_err in err_json["node_errors"].items():
-                    for e in n_err.get("errors", []):
-                        msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
-                        msgs.append(msg)
-                raise RuntimeError("ComfyUI: " + "; ".join(msgs))
+                for _n_id, n_err in err_json["node_errors"].items():
+                    class_type = n_err.get("class_type", "") if isinstance(n_err, dict) else ""
+                    expected_folder = folder_by_class.get(class_type, "ComfyUI/models")
+                    for e in (n_err.get("errors", []) if isinstance(n_err, dict) else []):
+                        if isinstance(e, dict) and e.get("type") == "value_not_in_list":
+                            extra = e.get("extra_info") or {}
+                            val = extra.get("received_value") or e.get("details") or "?"
+                            msgs.append(_srv_t(
+                                f"Modell '{val}' wurde in ComfyUI ({expected_folder}) nicht gefunden. "
+                                f"Bitte prüfe, ob die Datei im richtigen Ordner liegt und starte ComfyUI ggf. neu.",
+                                f"Model '{val}' was not found by ComfyUI in {expected_folder}. "
+                                f"Please verify the file is in the right folder and restart ComfyUI if needed."
+                            ))
+                        else:
+                            msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
+                            msgs.append(msg)
+                if msgs:
+                    raise RuntimeError("ComfyUI: " + " | ".join(msgs))
             if "error" in err_json:
                 err_info = err_json["error"]
                 msg = err_info.get("message", str(err_info)) if isinstance(err_info, dict) else str(err_info)
                 raise RuntimeError("ComfyUI: " + msg)
-        except Exception:
-            pass
         raise RuntimeError(f"ComfyUI Fehler: {err_body}")
 
 def comfy_interrupt(comfy_url: str) -> bool:
@@ -881,70 +983,293 @@ def comfy_interrupt(comfy_url: str) -> bool:
         print("[ai] Interrupt error:", ex)
         return False
 
-def compile_frames_to_gif(frames_dir: str, output_path: str, fps: int = 12, scale_width: int = 400, pingpong: bool = True, reverse: bool = False) -> bool:
-    ffmpeg = get_ffmpeg_path()
-    if not ffmpeg:
-        print("[ai] FFmpeg not found!")
-        return False
-
-    input_pattern = os.path.join(frames_dir, "frame_%05d.png")
-    if pingpong:
-        if reverse:
-            filter_str = (
-                f"[0:v]reverse[r];"
-                f"[r][0:v]concat=n=2:v=1[full];"
-                f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
-                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
-                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-            )
-        else:
-            filter_str = (
-                f"[0:v]reverse[r];"
-                f"[0:v][r]concat=n=2:v=1[full];"
-                f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
-                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
-                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-            )
-    else:
-        if reverse:
-            filter_str = (
-                f"[0:v]reverse[r];"
-                f"[r]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
-                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
-                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-            )
-        else:
-            filter_str = (
-                f"[0:v]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
-                f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
-                f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-            )
-
-    cmd = [
-        ffmpeg, "-y",
-        "-framerate", str(fps),
-        "-i", input_pattern,
-        "-filter_complex", filter_str,
-        "-loop", "0",
-        output_path,
-    ]
-    creation_flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+def compile_frames_to_gif_pillow(frames_dir: str, output_path: str, fps: int = 12, scale_width: int = 400, pingpong: bool = True, reverse: bool = False) -> tuple[bool, str]:
+    """Fallback GIF compiler using Pillow when FFmpeg is unavailable or fails."""
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=60,
-            creationflags=creation_flags,
-        )
-        if proc.returncode != 0:
-            print("[ai] FFmpeg compile error:", proc.stderr)
-            return False
-        return os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+        from PIL import Image
     except Exception as ex:
-        print("[ai] FFmpeg execution error:", ex)
+        return False, f"Pillow import error: {ex}"
+
+    frame_files = sorted(
+        f for f in os.listdir(frames_dir)
+        if f.lower().startswith("frame_") and f.lower().endswith(".png")
+    )
+    if not frame_files:
+        return False, "No PNG frames found in temporary directory."
+
+    try:
+        loaded = []
+        resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        for fn in frame_files:
+            fpath = os.path.join(frames_dir, fn)
+            with Image.open(fpath) as im:
+                rgb = im.convert("RGB")
+                if scale_width and rgb.width > 0 and rgb.width != scale_width:
+                    new_h = max(1, int(round(rgb.height * (scale_width / float(rgb.width)))))
+                    rgb = rgb.resize((scale_width, new_h), resample)
+                loaded.append(rgb)
+
+        if reverse:
+            loaded = list(reversed(loaded))
+        if pingpong and len(loaded) > 1:
+            loaded = loaded + list(reversed(loaded))
+
+        duration_ms = max(20, int(round(1000.0 / max(1, fps))))
+        quantized = [f.quantize(colors=128, method=Image.Quantize.MEDIANCUT) if hasattr(Image, "Quantize") else f.convert("P", palette=Image.ADAPTIVE, colors=128) for f in loaded]
+        quantized[0].save(
+            output_path,
+            save_all=True,
+            append_images=quantized[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=True,
+        )
+        ok = os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+        return (ok, "" if ok else "Pillow wrote an empty GIF file.")
+    except Exception as ex:
+        return False, f"Pillow GIF error: {ex}"
+
+def compile_frames_to_gif(frames_dir: str, output_path: str, fps: int = 12, scale_width: int = 400, pingpong: bool = True, reverse: bool = False) -> tuple[bool, str]:
+    """Compile PNG frames into an optimized animated GIF via FFmpeg, falling back to Pillow."""
+    ffmpeg = get_ffmpeg_path()
+    ffmpeg_err = ""
+
+    if ffmpeg:
+        input_pattern = os.path.join(frames_dir, "frame_%05d.png")
+        if pingpong:
+            if reverse:
+                filter_str = (
+                    f"[0:v]reverse[r];"
+                    f"[r][0:v]concat=n=2:v=1[full];"
+                    f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                    f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                    f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+                )
+            else:
+                filter_str = (
+                    f"[0:v]reverse[r];"
+                    f"[0:v][r]concat=n=2:v=1[full];"
+                    f"[full]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                    f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                    f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+                )
+        else:
+            if reverse:
+                filter_str = (
+                    f"[0:v]reverse[r];"
+                    f"[r]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                    f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                    f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+                )
+            else:
+                filter_str = (
+                    f"[0:v]fps={fps},scale={scale_width}:-1:flags=lanczos,split[s0][s1];"
+                    f"[s0]palettegen=max_colors=128:reserve_transparent=0[p];"
+                    f"[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+                )
+
+        cmd = [
+            ffmpeg, "-y",
+            "-framerate", str(fps),
+            "-i", input_pattern,
+            "-filter_complex", filter_str,
+            "-loop", "0",
+            output_path,
+        ]
+        creation_flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                creationflags=creation_flags,
+            )
+            if proc.returncode == 0 and os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                return True, ""
+            ffmpeg_err = (proc.stderr or "").strip().splitlines()[-1] if proc.stderr else f"exit code {proc.returncode}"
+            print("[ai] FFmpeg compile error:", proc.stderr)
+        except Exception as ex:
+            ffmpeg_err = str(ex)
+            print("[ai] FFmpeg execution error:", ex)
+    else:
+        ffmpeg_err = "FFmpeg executable not found"
+        print("[ai] FFmpeg not found! Using Pillow fallback.")
+
+    # Fallback to Pillow so GIF creation never fails just because FFmpeg is missing
+    pil_ok, pil_err = compile_frames_to_gif_pillow(
+        frames_dir,
+        output_path,
+        fps=fps,
+        scale_width=scale_width,
+        pingpong=pingpong,
+        reverse=reverse,
+    )
+    if pil_ok:
+        return True, ""
+    return False, f"FFmpeg: {ffmpeg_err} | Pillow: {pil_err}"
+
+def apply_text_overlay_to_frames(frames_dir: str, text: str, position: str = "bottom", effect: str = "fade_in") -> bool:
+    """Overlays clean, crisp meme/subtitle text with outline (and optional fade-in) onto all PNG frames without obscuring the image."""
+    if not text or not frames_dir or not os.path.isdir(frames_dir):
         return False
+    from PIL import Image, ImageDraw, ImageFont
+
+    frame_files = sorted([
+        f for f in os.listdir(frames_dir)
+        if f.lower().startswith("frame_") and f.lower().endswith(".png")
+    ])
+    if not frame_files:
+        return False
+
+    first_frame_path = os.path.join(frames_dir, frame_files[0])
+    try:
+        with Image.open(first_frame_path) as im:
+            img_w, img_h = im.size
+    except Exception as ex:
+        print("[ai overlay] Failed to read frame size:", ex)
+        return False
+
+    def _get_overlay_font(size: int):
+        candidates = ["impact.ttf", "arialbd.ttf", "segoeuib.ttf", "trebucbd.ttf", "arial.ttf"]
+        for c in candidates:
+            try:
+                return ImageFont.truetype(c, size)
+            except Exception:
+                pass
+        win_fonts = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts")
+        for c in candidates:
+            p = os.path.join(win_fonts, c)
+            if os.path.isfile(p):
+                try:
+                    return ImageFont.truetype(p, size)
+                except Exception:
+                    pass
+        return ImageFont.load_default()
+
+    def _wrap_text(txt: str, font, max_w: int, draw: ImageDraw.ImageDraw, sw: int):
+        lines = []
+        for para in txt.split("\n"):
+            words = para.strip().split()
+            if not words:
+                continue
+            cur = []
+            for w in words:
+                cand = " ".join(cur + [w])
+                bbox = draw.textbbox((0, 0), cand, font=font, stroke_width=sw)
+                if (bbox[2] - bbox[0]) <= max_w or not cur:
+                    cur.append(w)
+                else:
+                    lines.append(" ".join(cur))
+                    cur = [w]
+            if cur:
+                lines.append(" ".join(cur))
+        return lines
+
+    # Calculate optimal font size ensuring text takes up at most ~22% of image height
+    max_w = int(img_w * 0.90)
+    max_h = int(img_h * 0.22)
+    dummy_img = Image.new("RGB", (img_w, img_h))
+    dummy_draw = ImageDraw.Draw(dummy_img)
+
+    font_size = max(16, min(48, int(img_h * 0.08)))
+    chosen_lines = []
+    chosen_font = None
+    chosen_sw = 2
+    chosen_line_metrics = []
+    chosen_line_spacing = 4
+
+    while font_size >= 14:
+        font = _get_overlay_font(font_size)
+        sw = max(2, int(font_size * 0.08))
+        lines = _wrap_text(text, font, max_w, dummy_draw, sw)
+        if not lines:
+            lines = [text]
+        metrics = []
+        for line in lines:
+            bbox = dummy_draw.textbbox((0, 0), line, font=font, stroke_width=sw)
+            metrics.append((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+        spacing = int(font_size * 0.22)
+        total_h = sum(m[1] for m in metrics) + spacing * (len(lines) - 1)
+        max_line_w = max(m[0] for m in metrics) if metrics else 0
+
+        chosen_lines = lines
+        chosen_font = font
+        chosen_sw = sw
+        chosen_line_metrics = metrics
+        chosen_line_spacing = spacing
+
+        if total_h <= max_h and max_line_w <= max_w:
+            break
+        font_size -= 2
+
+    if not chosen_lines:
+        return False
+
+    total_h = sum(m[1] for m in chosen_line_metrics) + chosen_line_spacing * (len(chosen_lines) - 1)
+    if position == "top":
+        start_y = max(8, int(img_h * 0.05))
+    else:
+        start_y = max(8, img_h - total_h - int(img_h * 0.06))
+
+    center_x = img_w // 2
+
+    # Pre-render text onto a transparent RGBA layer
+    text_layer = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
+    layer_draw = ImageDraw.Draw(text_layer)
+    cur_y = start_y
+    for i, line in enumerate(chosen_lines):
+        layer_draw.text(
+            (center_x, cur_y),
+            line,
+            font=chosen_font,
+            fill="white",
+            stroke_width=chosen_sw,
+            stroke_fill="black",
+            anchor="mt",
+        )
+        cur_y += chosen_line_metrics[i][1] + chosen_line_spacing
+
+    _, _, _, base_alpha = text_layer.split()
+    total_frames = len(frame_files)
+
+    def _calc_alpha(frame_idx: int) -> float:
+        eff = str(effect or "fade_in").lower()
+        if eff == "fade_in":
+            fade_end = max(4, int(total_frames * 0.35))
+            return min(1.0, max(0.0, float(frame_idx) / float(fade_end)))
+        elif eff == "delayed_fade":
+            delay_end = max(2, int(total_frames * 0.25))
+            fade_end = max(delay_end + 3, int(total_frames * 0.55))
+            if frame_idx < delay_end:
+                return 0.0
+            return min(1.0, max(0.0, float(frame_idx - delay_end) / float(fade_end - delay_end)))
+        return 1.0
+
+    # Composite onto each frame
+    for idx, fn in enumerate(frame_files):
+        fpath = os.path.join(frames_dir, fn)
+        try:
+            a_val = _calc_alpha(idx)
+            if a_val <= 0.001:
+                # Text is completely invisible on this frame
+                continue
+
+            with Image.open(fpath) as im:
+                im_rgba = im.convert("RGBA")
+                if a_val >= 0.999:
+                    im_rgba.alpha_composite(text_layer)
+                else:
+                    cur_a = base_alpha.point(lambda p: int(p * a_val))
+                    cur_layer = text_layer.copy()
+                    cur_layer.putalpha(cur_a)
+                    im_rgba.alpha_composite(cur_layer)
+                im_rgba.convert("RGB").save(fpath, "PNG")
+        except Exception as ex:
+            print(f"[ai overlay] Error drawing overlay on {fn}:", ex)
+
+    return True
 
 def _safe_json_str(val: str) -> str:
     """Safely escape arbitrary string (paths, model names, prompts) for raw JSON template insertion."""
@@ -1042,19 +1367,21 @@ def _run_ai_generation_thread(params: dict):
             # FastH3 / MiniMax H3 produces photorealistic motion in 8 steps
             steps = 8
 
-            # Dynamically resolve exact installed model names from ComfyUI
+            # Dynamically resolve exact installed model names from ComfyUI per loader folder
             comfy_status = check_comfyui_status(comfy_url)
             avail_models = comfy_status.get("installed_models", [])
+            models_by_folder = comfy_status.get("models_by_folder", {})
 
-            def _resolve_model_name(candidates, default_val, keywords=None):
+            def _resolve_model_name(candidates, default_val, keywords=None, folder_type=None):
+                pool = models_by_folder.get(folder_type, avail_models) if folder_type else avail_models
                 for cand in candidates:
-                    for m in avail_models:
+                    for m in pool:
                         ml = m.lower().replace("\\", "/")
                         cl = cand.lower().replace("\\", "/")
                         if ml == cl or ml.endswith("/" + cl):
                             return m
                 if keywords:
-                    for m in avail_models:
+                    for m in pool:
                         ml = m.lower()
                         if all(kw.lower() in ml for kw in keywords):
                             return m
@@ -1067,21 +1394,21 @@ def _run_ai_generation_thread(params: dict):
                 "MiniMax_H3_Ref2VA_pruned_int8_convrot.safetensors",
                 "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
                 "minimax_h3_fl2va_bf16.safetensors",
-            ], "minimax_h3/minimax_h3_fl2va_pruned_int8_convrot.safetensors", ["minimax", "fl2va"])
+            ], "minimax_h3/minimax_h3_fl2va_pruned_int8_convrot.safetensors", ["minimax", "fl2va"], "diffusion_models")
 
             clip_name = _resolve_model_name([
                 "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
                 "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
                 "qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
                 "qwen3vl_32b_minimax_h3_bf16.safetensors",
-            ], "minimax_h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", ["qwen3vl", "minimax"])
+            ], "minimax_h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", ["qwen3vl", "minimax"], "text_encoders")
 
             vae_name = _resolve_model_name([
                 "minimax_h3_video_vae_fp16.safetensors",
                 "minimax_h3_video_vae_bf16.safetensors",
                 "minimax_h3_video_vae.safetensors",
                 "minimax_video_vae_fp16.safetensors",
-            ], "minimax_h3/minimax_h3_video_vae_fp16.safetensors", ["minimax", "vae"])
+            ], "minimax_h3/minimax_h3_video_vae_fp16.safetensors", ["minimax", "vae"], "vae")
 
             wf_str = wf_str.replace("{{UNET_NAME}}", _safe_json_str(unet_name))
             wf_str = wf_str.replace("{{CLIP_NAME}}", _safe_json_str(clip_name))
@@ -1173,6 +1500,20 @@ def _run_ai_generation_thread(params: dict):
             with urllib.request.urlopen(req_v, timeout=15) as resp_v, open(dest_frame, "wb") as out_f:
                 shutil.copyfileobj(resp_v, out_f)
 
+        # 6b. Apply optional text overlay to frames before GIF conversion
+        overlay_enabled = bool(params.get("overlay_enabled", False))
+        overlay_text = str(params.get("overlay_text") or "").strip()
+        overlay_pos = str(params.get("overlay_position") or "bottom").strip().lower()
+        overlay_eff = str(params.get("overlay_effect") or "fade_in").strip().lower()
+
+        if overlay_enabled and overlay_text:
+            with AI_STATE_LOCK:
+                AI_STATE["status_text"] = _srv_t("Füge Text-Overlay ein...", "Applying text overlay...")
+            try:
+                apply_text_overlay_to_frames(temp_frames_dir, overlay_text, position=overlay_pos, effect=overlay_eff)
+            except Exception as ex_overlay:
+                print("[ai overlay] Warning - overlay failed:", ex_overlay)
+
         # 7. Convert frames to GIF using FFmpeg
         with AI_STATE_LOCK:
             AI_STATE["progress"] = 93
@@ -1205,9 +1546,9 @@ def _run_ai_generation_thread(params: dict):
         pingpong = bool(params.get("loop_mode", "pingpong") == "pingpong")
         reverse = bool(params.get("reverse", False))
 
-        compile_ok = compile_frames_to_gif(temp_frames_dir, final_gif_path, fps=fps, scale_width=scale_width, pingpong=pingpong, reverse=reverse)
+        compile_ok, compile_err = compile_frames_to_gif(temp_frames_dir, final_gif_path, fps=fps, scale_width=scale_width, pingpong=pingpong, reverse=reverse)
         if not compile_ok:
-            raise RuntimeError("FFmpeg GIF-Erstellung fehlgeschlagen.")
+            raise RuntimeError(f"GIF-Erstellung fehlgeschlagen ({compile_err}).")
 
         # Save source image & meta.json next to final GIF
         base_no_ext = os.path.splitext(final_gif_path)[0]
@@ -1231,6 +1572,9 @@ def _run_ai_generation_thread(params: dict):
             "loop_mode": "pingpong" if pingpong else "normal",
             "reverse": reverse,
             "title": user_title,
+            "overlay_text": overlay_text if overlay_enabled else "",
+            "overlay_position": overlay_pos if overlay_enabled else "",
+            "overlay_effect": overlay_eff if overlay_enabled else "",
             "created_at": int(time.time()),
         }
         meta_path = base_no_ext + ".meta.json"
@@ -2217,6 +2561,7 @@ def run_native_window(url: str, server: ThreadingHTTPServer) -> bool:
             height=740,
             min_size=(800, 520),
             background_color=bg,
+            text_select=True,
         )
 
         global ACTIVE_WEBVIEW_WINDOW

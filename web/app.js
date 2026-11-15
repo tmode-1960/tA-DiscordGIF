@@ -87,6 +87,56 @@
   let aiDownloadPollTimer = null;
   let comfyOnline = false;
   let comfyInstalledModels = [];
+  let comfyModelsByFolder = {};
+  let comfyDiskModelsByFolder = {};
+
+  function matchesModelList(list, candidates) {
+    if (!Array.isArray(list) || list.length === 0) return false;
+    return list.some((m) => {
+      const ml = String(m || "").toLowerCase();
+      return candidates.some((c) => ml === c || ml.endsWith("/" + c) || ml.endsWith("\\" + c));
+    });
+  }
+
+  function getRequiredFilesStatus(wf) {
+    if (!wf) return [];
+    const hasFolderMap = comfyModelsByFolder && Object.keys(comfyModelsByFolder).length > 0;
+    const reqList = (Array.isArray(wf.required_files) && wf.required_files.length > 0)
+      ? wf.required_files
+      : (wf.checkpoint ? [{
+          id: "ckpt",
+          name: wf.checkpoint,
+          filename: wf.checkpoint,
+          folder_type: "checkpoints",
+          url: wf.model_url,
+          size_str: wf.model_size || "4.7 GB",
+        }] : []);
+
+    return reqList.map((rf) => {
+      const fn = (rf.filename || "").toLowerCase();
+      const alts = Array.isArray(rf.alternatives) ? rf.alternatives.map((a) => a.toLowerCase()) : [];
+      const candidates = [fn, ...alts].filter(Boolean);
+      const pool = (hasFolderMap && rf.folder_type && Array.isArray(comfyModelsByFolder[rf.folder_type]))
+        ? comfyModelsByFolder[rf.folder_type]
+        : comfyInstalledModels;
+      const installed = matchesModelList(pool, candidates);
+
+      let diskHint = "";
+      if (!installed && comfyDiskModelsByFolder && typeof comfyDiskModelsByFolder === "object") {
+        if (rf.folder_type && matchesModelList(comfyDiskModelsByFolder[rf.folder_type], candidates)) {
+          diskHint = t("aiModelHintRestartComfy", { folder: rf.folder_type });
+        } else {
+          for (const [foundFolder, files] of Object.entries(comfyDiskModelsByFolder)) {
+            if (foundFolder !== rf.folder_type && matchesModelList(files, candidates)) {
+              diskHint = t("aiModelHintWrongFolder", { foundFolder, expectedFolder: rf.folder_type || "checkpoints" });
+              break;
+            }
+          }
+        }
+      }
+      return { ...rf, installed, diskHint };
+    });
+  }
 
   const searchBoxContainer = document.getElementById("searchBoxContainer");
   const behaviorCard = document.getElementById("behaviorCard");
@@ -129,8 +179,15 @@
   const btnClearAiImage = document.getElementById("btnClearAiImage");
 
   const aiPromptInput = document.getElementById("aiPromptInput");
+  const btnCopyPrompt = document.getElementById("btnCopyPrompt");
+  const btnClearPrompt = document.getElementById("btnClearPrompt");
   const aiPromptPills = document.getElementById("aiPromptPills");
   const aiTitleInput = document.getElementById("aiTitleInput");
+  const chkAiOverlay = document.getElementById("chkAiOverlay");
+  const aiOverlayPosition = document.getElementById("aiOverlayPosition");
+  const aiOverlayEffect = document.getElementById("aiOverlayEffect");
+  const aiOverlayBox = document.getElementById("aiOverlayBox");
+  const aiOverlayTextInput = document.getElementById("aiOverlayTextInput");
   const btnGenerateAi = document.getElementById("btnGenerateAi");
   const btnCancelAi = document.getElementById("btnCancelAi");
 
@@ -545,6 +602,58 @@
       });
     }
 
+    // Prompt copy and clear buttons
+    if (btnCopyPrompt) {
+      btnCopyPrompt.addEventListener("click", async () => {
+        const val = aiPromptInput ? aiPromptInput.value.trim() : "";
+        if (!val) return;
+        try {
+          await navigator.clipboard.writeText(val);
+          showToast(t("promptCopiedToast"), "ok");
+        } catch (_) {
+          if (aiPromptInput) {
+            aiPromptInput.select();
+            document.execCommand("copy");
+            showToast(t("promptCopiedToast"), "ok");
+          }
+        }
+      });
+    }
+
+    if (btnClearPrompt) {
+      btnClearPrompt.addEventListener("click", () => {
+        if (aiPromptInput) {
+          aiPromptInput.value = "";
+          aiPromptInput.focus();
+        }
+      });
+    }
+
+    // Text overlay toggle
+    if (chkAiOverlay) {
+      chkAiOverlay.addEventListener("change", () => {
+        const active = chkAiOverlay.checked;
+        if (aiOverlayBox) aiOverlayBox.style.display = active ? "block" : "none";
+        if (aiOverlayPosition) aiOverlayPosition.style.display = active ? "block" : "none";
+        if (aiOverlayEffect) aiOverlayEffect.style.display = active ? "block" : "none";
+        if (active && aiOverlayTextInput) {
+          aiOverlayTextInput.focus();
+        }
+      });
+    }
+
+    // Ctrl+Enter in prompt textarea triggers generation
+    if (aiPromptInput) {
+      aiPromptInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          if (btnGenerateAi && !btnGenerateAi.disabled) {
+            btnGenerateAi.click();
+          }
+        }
+      });
+    }
+
     // Image dropzone click & drag
     if (aiDropZone && aiFileInput) {
       aiDropZone.addEventListener("click", () => aiFileInput.click());
@@ -624,6 +733,164 @@
         if (localBtn) localBtn.click();
       });
     }
+
+    initContextMenu();
+  }
+
+  function initContextMenu() {
+    const menu = document.getElementById("appContextMenu");
+    if (!menu) return;
+
+    const btnCut = document.getElementById("ctxCut");
+    const btnCopy = document.getElementById("ctxCopy");
+    const btnPaste = document.getElementById("ctxPaste");
+    const btnSelectAll = document.getElementById("ctxSelectAll");
+
+    let activeTarget = null;
+    let savedSelStart = 0;
+    let savedSelEnd = 0;
+
+    // Prevent menu mousedown from stealing focus or collapsing selection
+    menu.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+    });
+
+    function hideMenu() {
+      menu.style.display = "none";
+    }
+
+    window.addEventListener("contextmenu", (e) => {
+      const target = e.target;
+      const isInput = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
+
+      let selectedText = "";
+      if (isInput) {
+        const s = target.selectionStart;
+        const end = target.selectionEnd;
+        if (s !== null && end !== null && end > s) {
+          selectedText = target.value.substring(s, end);
+        }
+        activeTarget = target;
+        savedSelStart = s !== null ? s : 0;
+        savedSelEnd = end !== null ? end : 0;
+      } else {
+        selectedText = window.getSelection() ? window.getSelection().toString() : "";
+        activeTarget = target;
+        savedSelStart = 0;
+        savedSelEnd = 0;
+      }
+
+      const hasSelection = selectedText.length > 0;
+      const isEditable = isInput && !target.readOnly && !target.disabled;
+
+      // Show context menu if right-clicking inside an input/textarea OR if any text is highlighted
+      if (!isInput && !hasSelection) {
+        hideMenu();
+        return;
+      }
+
+      e.preventDefault();
+
+      if (btnCopy) btnCopy.disabled = !hasSelection;
+      if (btnCut) btnCut.disabled = !(isEditable && hasSelection);
+      if (btnPaste) btnPaste.disabled = !isEditable;
+      if (btnSelectAll) btnSelectAll.disabled = !isInput && !document.body;
+
+      menu.style.display = "block";
+      const menuWidth = menu.offsetWidth || 180;
+      const menuHeight = menu.offsetHeight || 150;
+      const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+      const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+
+      menu.style.left = `${Math.max(4, x)}px`;
+      menu.style.top = `${Math.max(4, y)}px`;
+    });
+
+    // Action: Copy
+    if (btnCopy) {
+      btnCopy.addEventListener("click", async () => {
+        hideMenu();
+        let textToCopy = "";
+        if (activeTarget && (activeTarget.tagName === "INPUT" || activeTarget.tagName === "TEXTAREA")) {
+          textToCopy = activeTarget.value.substring(savedSelStart, savedSelEnd);
+        } else {
+          textToCopy = window.getSelection() ? window.getSelection().toString() : "";
+        }
+        if (textToCopy) {
+          try {
+            await navigator.clipboard.writeText(textToCopy);
+          } catch (_) {
+            document.execCommand("copy");
+          }
+        }
+      });
+    }
+
+    // Action: Cut
+    if (btnCut) {
+      btnCut.addEventListener("click", async () => {
+        hideMenu();
+        if (!activeTarget || (activeTarget.tagName !== "INPUT" && activeTarget.tagName !== "TEXTAREA")) return;
+        const textToCut = activeTarget.value.substring(savedSelStart, savedSelEnd);
+        if (textToCut) {
+          try {
+            await navigator.clipboard.writeText(textToCut);
+          } catch (_) {
+            document.execCommand("copy");
+          }
+          activeTarget.focus();
+          activeTarget.setSelectionRange(savedSelStart, savedSelEnd);
+          activeTarget.setRangeText("", savedSelStart, savedSelEnd, "end");
+          activeTarget.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+    }
+
+    // Action: Paste
+    if (btnPaste) {
+      btnPaste.addEventListener("click", async () => {
+        hideMenu();
+        if (!activeTarget || (activeTarget.tagName !== "INPUT" && activeTarget.tagName !== "TEXTAREA")) return;
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text !== undefined && text !== null) {
+            activeTarget.focus();
+            activeTarget.setSelectionRange(savedSelStart, savedSelEnd);
+            activeTarget.setRangeText(text, savedSelStart, savedSelEnd, "end");
+            activeTarget.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        } catch (err) {
+          console.warn("Clipboard paste access:", err);
+        }
+      });
+    }
+
+    // Action: Select All
+    if (btnSelectAll) {
+      btnSelectAll.addEventListener("click", () => {
+        hideMenu();
+        if (activeTarget && (activeTarget.tagName === "INPUT" || activeTarget.tagName === "TEXTAREA")) {
+          activeTarget.focus();
+          activeTarget.select();
+        } else {
+          const sel = window.getSelection();
+          if (sel) {
+            const range = document.createRange();
+            range.selectNodeContents(document.body);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        }
+      });
+    }
+
+    // Dismiss menu on outside clicks, Esc, scroll or window resize
+    window.addEventListener("click", hideMenu);
+    window.addEventListener("scroll", hideMenu, true);
+    window.addEventListener("resize", hideMenu);
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") hideMenu();
+    });
   }
 
   function handleAiImageFile(file) {
@@ -688,36 +955,14 @@
           }
         }
 
-        // Check required models/files
+        // Check required models/files per ComfyUI loader folder
         comfyInstalledModels = data.installed_models || [];
+        comfyModelsByFolder = data.models_by_folder || {};
+        comfyDiskModelsByFolder = data.disk_models_by_folder || {};
         const currentWf = aiWorkflows.find((w) => w.id === (aiModelSelect ? aiModelSelect.value : "minimax_h3")) || aiWorkflows[0];
 
         if (currentWf) {
-          let filesWithStatus = [];
-          if (Array.isArray(currentWf.required_files) && currentWf.required_files.length > 0) {
-            filesWithStatus = currentWf.required_files.map((rf) => {
-              const fn = (rf.filename || "").toLowerCase();
-              const alts = Array.isArray(rf.alternatives) ? rf.alternatives.map((a) => a.toLowerCase()) : [];
-              const candidates = [fn, ...alts];
-              const has = comfyInstalledModels.some((m) => {
-                const ml = m.toLowerCase();
-                return candidates.some((c) => ml === c || ml.endsWith("/" + c) || ml.endsWith("\\" + c) || ml.includes(c));
-              });
-              return { ...rf, installed: has };
-            });
-          } else if (currentWf.checkpoint) {
-            const hasModel = comfyInstalledModels.some((m) => m.toLowerCase().includes(currentWf.checkpoint.toLowerCase()));
-            filesWithStatus = [{
-              id: "ckpt",
-              name: currentWf.checkpoint,
-              filename: currentWf.checkpoint,
-              folder_type: "checkpoints",
-              url: currentWf.model_url,
-              size_str: currentWf.model_size || "4.7 GB",
-              installed: hasModel,
-            }];
-          }
-
+          const filesWithStatus = getRequiredFilesStatus(currentWf);
           const missingFiles = filesWithStatus.filter((f) => !f.installed);
 
           if (missingFiles.length > 0) {
@@ -735,6 +980,7 @@
                         <div>
                           <b style="color:var(--text);">${escapeHtml(f.name)}</b>
                           <span style="display:block; font-size:10px; color:var(--mute);">models/${escapeHtml(f.folder_type)}/${escapeHtml(f.filename)}</span>
+                          ${f.diskHint ? `<span style="display:block; font-size:10px; color:#fbbf24; margin-top:2px;">${escapeHtml(f.diskHint)}</span>` : ""}
                         </div>
                       </div>
                       <div>
@@ -909,36 +1155,9 @@
     }
 
     const currentWf = aiWorkflows.find((w) => w.id === (aiModelSelect ? aiModelSelect.value : "minimax_h3")) || aiWorkflows[0];
-    let missingFiles = [];
-    if (currentWf) {
-      if (Array.isArray(currentWf.required_files) && currentWf.required_files.length > 0) {
-        for (const rf of currentWf.required_files) {
-          const fn = (rf.filename || "").toLowerCase();
-          const alts = Array.isArray(rf.alternatives) ? rf.alternatives.map((a) => a.toLowerCase()) : [];
-          const candidates = [fn, ...alts];
-          const has = comfyInstalledModels.some((m) => {
-            const ml = m.toLowerCase();
-            return candidates.some((c) => ml === c || ml.endsWith("/" + c) || ml.endsWith("\\" + c) || ml.includes(c));
-          });
-          if (!has) {
-            missingFiles.push(rf);
-          }
-        }
-      } else if (currentWf.checkpoint) {
-        const hasModel = comfyInstalledModels.some((m) => m.toLowerCase().includes(currentWf.checkpoint.toLowerCase()));
-        if (!hasModel) {
-          missingFiles.push({
-            name: currentWf.checkpoint,
-            filename: currentWf.checkpoint,
-            folder_type: "checkpoints",
-            url: currentWf.model_url,
-            size_str: currentWf.model_size || "4.7 GB",
-          });
-        }
-      }
-    }
+    const missingFiles = getRequiredFilesStatus(currentWf).filter((f) => !f.installed);
 
-    if (comfyInstalledModels.length > 0 && missingFiles.length > 0) {
+    if (missingFiles.length > 0) {
       if (aiModelMissingBanner) aiModelMissingBanner.style.display = "block";
       const fileNames = missingFiles.map((f) => `• ${f.name} (${f.size_str})`).join("\n");
       const ask = confirm(
@@ -986,6 +1205,10 @@
       loop_mode: chkAiPingPong && chkAiPingPong.checked ? "pingpong" : "normal",
       reverse: !!(chkAiReverse && chkAiReverse.checked),
       title: aiTitleInput ? aiTitleInput.value.trim() : "",
+      overlay_enabled: !!(chkAiOverlay && chkAiOverlay.checked),
+      overlay_text: aiOverlayTextInput ? aiOverlayTextInput.value.trim() : "",
+      overlay_position: aiOverlayPosition ? aiOverlayPosition.value : "bottom",
+      overlay_effect: aiOverlayEffect ? aiOverlayEffect.value : "fade_in",
     };
 
     try {
